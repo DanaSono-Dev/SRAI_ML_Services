@@ -1,0 +1,103 @@
+services:
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: srai-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/logs:/mosquitto/log
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: srai-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER:     srai
+      POSTGRES_PASSWORD: srai_pass
+      POSTGRES_DB:       srai_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U srai -d srai_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: srai-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER:     minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  inference_api:
+    build:
+      context: ./API_Inferencia_SRAI
+      dockerfile: Dockerfile
+    container_name: srai-inference
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./API_Inferencia_SRAI/.env
+    volumes:
+      - ./API_Inferencia_SRAI/modelo:/app/modelo
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+  srai_pipeline:
+    build:
+      context: ./API_images/srai_pipeline
+      dockerfile: Dockerfile
+    container_name: srai-pipeline
+    ports:
+      - "8002:8002"
+    env_file:
+      - ./API_images/srai_pipeline/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      inference_api:
+        condition: service_started
+    restart: unless-stopped
+
+  srai_receiver:
+    build:
+      context: ./API_images/srai_receiver
+      dockerfile: Dockerfile
+    container_name: srai-receiver
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./API_images/srai_receiver/.env
+    depends_on:
+      - mosquitto
+      - srai_pipeline
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  minio_data:
