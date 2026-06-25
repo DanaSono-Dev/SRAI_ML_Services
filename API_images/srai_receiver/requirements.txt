@@ -1,0 +1,4 @@
+fastapi
+uvicorn[standard]
+paho-mqtt==1.6.1
+httpx
