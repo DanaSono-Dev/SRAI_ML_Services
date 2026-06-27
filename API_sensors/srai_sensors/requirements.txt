@@ -1,6 +1,4 @@
 fastapi
 uvicorn[standard]
 asyncpg
-httpx
-minio
-python-multipart
+paho-mqtt==1.6.1

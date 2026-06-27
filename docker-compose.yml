@@ -98,6 +98,22 @@ services:
       - srai_pipeline
     restart: unless-stopped
 
+  srai_sensors:
+    build:
+      context: ./API_sensors/srai_sensors
+      dockerfile: Dockerfile
+    container_name: srai-sensors
+    ports:
+      - "8003:8003"
+    env_file:
+      - ./API_sensors/srai_sensors/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   minio_data:
