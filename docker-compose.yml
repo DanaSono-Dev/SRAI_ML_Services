@@ -114,6 +114,22 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  srai_dashboard:
+    build:
+      context: ./srai_dashboard
+      dockerfile: Dockerfile
+    container_name: srai-dashboard
+    ports:
+      - "8080:8080"
+    env_file:
+      - ./srai_dashboard/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   minio_data:

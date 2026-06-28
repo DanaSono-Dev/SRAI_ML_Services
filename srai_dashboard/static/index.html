@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SRAI — Panel de Monitoreo</title>
+<style>
+/* ═══════════════════════════════════════════
+   VARIABLES & RESET
+═══════════════════════════════════════════ */
+:root {
+  --bg:          #0f172a;
+  --surface:     #1e293b;
+  --surface2:    #263248;
+  --border:      #334155;
+  --text:        #e2e8f0;
+  --muted:       #94a3b8;
+  --green:       #22c55e;
+  --green-bg:    rgba(34,197,94,0.13);
+  --amber:       #f59e0b;
+  --amber-bg:    rgba(245,158,11,0.13);
+  --orange:      #f97316;
+  --orange-bg:   rgba(249,115,22,0.13);
+  --red:         #ef4444;
+  --red-bg:      rgba(239,68,68,0.13);
+  --blue:        #38bdf8;
+  --blue-bg:     rgba(56,189,248,0.12);
+  --violet:      #a78bfa;
+  --radius:      12px;
+  --gap:         10px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+}
+
+/* ═══════════════════════════════════════════
+   HEADER
+═══════════════════════════════════════════ */
+header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.brand-dot { color: var(--green); font-size: 10px; }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pulse-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  display: inline-block;
+  animation: pulse 2.2s ease-in-out infinite;
+}
+
+#clock {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+}
+
+/* ═══════════════════════════════════════════
+   MAIN GRID — 2×2
+═══════════════════════════════════════════ */
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: var(--gap);
+  padding: var(--gap);
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ═══════════════════════════════════════════
+   CARD
+═══════════════════════════════════════════ */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.card-hdr {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.card-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.card-body {
+  flex: 1;
+  overflow: auto;
+  padding: 10px 12px;
+  min-height: 0;
+}
+
+/* ═══════════════════════════════════════════
+   SHARED ATOMS
+═══════════════════════════════════════════ */
+.tag {
+  font-size: 10px;
+  background: var(--surface2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge-sanas          { background: var(--green-bg);  color: var(--green); }
+.badge-tizon_temprano { background: var(--amber-bg);  color: var(--amber); }
+.badge-moho_foliar    { background: var(--orange-bg); color: var(--orange); }
+.badge-TYLCV          { background: var(--red-bg);    color: var(--red); }
+.badge-unknown        { background: rgba(100,116,139,.15); color: var(--muted); }
+
+.status {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+.s-ok   { background: var(--green-bg);  color: var(--green); }
+.s-warn { background: var(--amber-bg);  color: var(--amber); }
+.s-crit { background: var(--red-bg);    color: var(--red); }
+.s-info { background: var(--blue-bg);   color: var(--blue); }
+
+.divider { height: 1px; background: var(--border); margin: 6px 0; }
+
+.no-data {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 22px; height: 22px;
+  border: 3px solid var(--border);
+  border-top-color: var(--blue);
+  border-radius: 50%;
+  animation: spin 0.75s linear infinite;
+}
+
+/* ═══════════════════════════════════════════
+   SECTION 1 — Latest Inference
+═══════════════════════════════════════════ */
+.s1-wrap {
+  display: flex;
+  gap: 12px;
+  height: 100%;
+  min-height: 0;
+}
+
+.s1-img-box {
+  flex: 0 0 42%;
+  background: #080e1c;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.s1-img-box img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+}
+
+.s1-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  min-width: 0;
+  justify-content: center;
+}
+
+.conf-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.conf-bar {
+  flex: 1;
+  height: 5px;
+  background: var(--surface2);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.conf-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width .5s ease;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.meta-lbl {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.meta-val {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.prob-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.prob-item {
+  background: var(--surface2);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 10px;
+}
+
+.prob-name { color: var(--muted); }
+.prob-val  { font-weight: 700; }
+
+/* ═══════════════════════════════════════════
+   SECTION 2 — Image Carousel
+═══════════════════════════════════════════ */
+.car-wrap {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 6px;
+  min-height: 0;
+}
+
+.car-stage {
+  flex: 1;
+  position: relative;
+  background: #080e1c;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.car-stage img {
+  width: 100%; height: 100%;
+  object-fit: contain;
+}
+
+.car-btn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0,0,0,.55);
+  border: none;
+  color: #fff;
+  font-size: 17px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  z-index: 2;
+  line-height: 1;
+  transition: background .15s;
+}
+
+.car-btn:hover { background: rgba(0,0,0,.85); }
+.car-prev { left: 7px; }
+.car-next { right: 7px; }
+
+.car-info {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.car-dots {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--border);
+  cursor: pointer;
+  transition: background .2s;
+}
+
+.dot.active { background: var(--blue); }
+
+/* ═══════════════════════════════════════════
+   SECTION 3 — Sensor Carousel
+═══════════════════════════════════════════ */
+.dev-nav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.btn-sm {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 1px 7px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.6;
+  transition: background .15s;
+}
+
+.btn-sm:hover { background: var(--border); }
+
+.dev-slide {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100%;
+  overflow: auto;
+}
+
+.sg {
+  background: var(--surface2);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+.sg-title {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.sr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.sr-name {
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sr-val {
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.valve-open   { color: var(--green); font-weight: 700; font-size: 11px; }
+.valve-closed { color: var(--muted); font-size: 11px; }
+
+/* ═══════════════════════════════════════════
+   SECTION 4 — Averages
+═══════════════════════════════════════════ */
+.avg-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+
+.avg-card {
+  background: var(--surface2);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+
+.avg-lbl {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--muted);
+}
+
+.avg-val {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  margin: 2px 0;
+}
+
+.avg-unit {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.gas-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.gas-name { flex: 1; color: var(--muted); font-size: 11px; }
+.gas-val  { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ═══════════════════════════════════════════
+   ANIMATIONS
+═══════════════════════════════════════════ */
+@keyframes spin  { to { transform: rotate(360deg); } }
+@keyframes pulse {
+  0%,100% { opacity:1; transform:scale(1);   }
+  50%      { opacity:.5; transform:scale(.8); }
+}
+
+/* scrollbar */
+::-webkit-scrollbar        { width: 3px; height: 3px; }
+::-webkit-scrollbar-track  { background: transparent; }
+::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- ── HEADER ─────────────────────────────────────────────────────────── -->
+<header>
+  <div class="brand">
+    <span class="brand-dot">●</span>
+    SRAI — Panel de Monitoreo
+  </div>
+  <div class="header-right">
+    <span class="pulse-dot"></span>
+    <span id="last-update">Cargando…</span>
+    <span id="clock">--:--:--</span>
+  </div>
+</header>
+
+<!-- ── GRID 2×2 ───────────────────────────────────────────────────────── -->
+<main class="grid">
+
+  <!-- ┌ SECCIÓN 1: Última Inferencia ─────────────────────────────────── -->
+  <div class="card">
+    <div class="card-hdr">
+      <div class="card-title">⚡ Última Inferencia</div>
+      <span class="tag" id="s1-device">—</span>
+    </div>
+    <div class="card-body" id="s1-body">
+      <div class="no-data"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- ┐ SECCIÓN 2: Carrusel Imágenes de Hoy ─────────────────────────── -->
+  <div class="card">
+    <div class="card-hdr">
+      <div class="card-title">🖼️ Imágenes de Hoy</div>
+      <span class="tag" id="s2-counter">0 imágenes</span>
+    </div>
+    <div class="card-body" id="s2-body">
+      <div class="no-data"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- └ SECCIÓN 3: Carrusel Sensores por Dispositivo ────────────────── -->
+  <div class="card">
+    <div class="card-hdr">
+      <div class="card-title">📡 Sensores por Dispositivo</div>
+      <div class="dev-nav">
+        <span class="tag" id="s3-counter">0/0</span>
+        <button class="btn-sm" id="s3-prev">‹</button>
+        <button class="btn-sm" id="s3-next">›</button>
+      </div>
+    </div>
+    <div class="card-body" id="s3-body">
+      <div class="no-data"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- ┘ SECCIÓN 4: Promedios Globales ──────────────────────────────── -->
+  <div class="card">
+    <div class="card-hdr">
+      <div class="card-title">📊 Promedios Globales</div>
+      <span class="tag" id="s4-tag">última hora</span>
+    </div>
+    <div class="card-body" id="s4-body">
+      <div class="no-data"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════════════ */
+
+function fmtDatetime(iso) {
+  if (!iso) return '—';
+  return new Intl.DateTimeFormat('es-MX', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).format(new Date(iso));
+}
+
+function fmtTime(iso) {
+  if (!iso) return '—';
+  return new Intl.DateTimeFormat('es-MX', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  }).format(new Date(iso));
+}
+
+function n(val, dec = 1) {
+  if (val === null || val === undefined) return '—';
+  return Number(val).toFixed(dec);
+}
+
+function claseInfo(clase) {
+  const map = {
+    sanas:          { label: 'Planta Sana',     css: 'badge-sanas',          icon: '🌱', color: '#22c55e' },
+    tizon_temprano: { label: 'Tizón Temprano',  css: 'badge-tizon_temprano', icon: '⚠️', color: '#f59e0b' },
+    moho_foliar:    { label: 'Moho Foliar',     css: 'badge-moho_foliar',    icon: '🍄', color: '#f97316' },
+    TYLCV:          { label: 'TYLCV',           css: 'badge-TYLCV',          icon: '🚨', color: '#ef4444' },
+  };
+  return map[clase] || { label: clase || 'Desconocido', css: 'badge-unknown', icon: '❓', color: '#6b7280' };
+}
+
+function statusCss(estado) {
+  if (!estado) return '';
+  const s = estado.toUpperCase();
+  if (['OPTIMA','BUENA','ADECUADA','NORMAL'].some(x => s.includes(x))) return 's-ok';
+  if (['BAJA','ALTA','MODERADA','ELEVADA'].some(x => s.includes(x)))   return 's-warn';
+  if (['CRITICA','MUY_ALTA','MUY_BAJA','PELIGROS'].some(x => s.includes(x))) return 's-crit';
+  return 's-info';
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   RELOJ
+═══════════════════════════════════════════════════════════════ */
+function startClock() {
+  const el = document.getElementById('clock');
+  const fmt = new Intl.DateTimeFormat('es-MX', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+  });
+  const tick = () => el.textContent = fmt.format(new Date());
+  tick();
+  setInterval(tick, 1000);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   FETCH
+═══════════════════════════════════════════════════════════════ */
+async function fetchJSON(url) {
+  try {
+    const r = await fetch(url);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+async function fetchAll() {
+  const [latest, today, sensors, averages] = await Promise.all([
+    fetchJSON('/api/latest-inference'),
+    fetchJSON('/api/today-captures'),
+    fetchJSON('/api/sensors/all-latest'),
+    fetchJSON('/api/sensors/averages'),
+  ]);
+  return { latest, today, sensors, averages };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN 1 — Última Inferencia
+═══════════════════════════════════════════════════════════════ */
+function renderS1(payload) {
+  const body   = document.getElementById('s1-body');
+  const devTag = document.getElementById('s1-device');
+
+  const d = payload?.data;
+  if (!d) {
+    devTag.textContent = '—';
+    body.innerHTML = `<div class="no-data">Sin datos de inferencia</div>`;
+    return;
+  }
+
+  const ci   = claseInfo(d.clase);
+  const conf = ((d.confianza ?? 0) * 100).toFixed(1);
+  const probs = d.probabilidades || {};
+  devTag.textContent = d.device_id || '—';
+
+  body.innerHTML = `
+    <div class="s1-wrap">
+      <div class="s1-img-box">
+        ${d.image_url
+          ? `<img src="${d.image_url}" alt="Captura" loading="lazy" onerror="this.style.display='none'">`
+          : `<div class="no-data" style="height:100%;font-size:11px">Sin imagen</div>`}
+      </div>
+      <div class="s1-info">
+        <div>
+          <span class="badge ${ci.css}">${ci.icon} ${ci.label}</span>
+        </div>
+
+        <div>
+          <div class="meta-lbl" style="font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:3px">Confianza</div>
+          <div class="conf-row">
+            <div class="conf-bar">
+              <div class="conf-fill" style="width:${conf}%;background:${ci.color}"></div>
+            </div>
+            <span style="font-size:13px;font-weight:700;font-variant-numeric:tabular-nums">${conf}%</span>
+          </div>
+        </div>
+
+        <div class="meta">
+          <span class="meta-lbl">Dispositivo</span>
+          <span class="meta-val">${d.device_id || '—'}</span>
+        </div>
+        <div class="meta">
+          <span class="meta-lbl">Imagen recibida</span>
+          <span class="meta-val" style="font-size:11px">${fmtDatetime(d.received_at)}</span>
+        </div>
+        <div class="meta">
+          <span class="meta-lbl">Inferencia procesada</span>
+          <span class="meta-val" style="font-size:11px">${fmtDatetime(d.processed_at)}</span>
+        </div>
+
+        ${Object.keys(probs).length > 0 ? `
+        <div>
+          <div class="meta-lbl" style="font-size:9px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);margin-bottom:4px">Probabilidades</div>
+          <div class="prob-grid">
+            ${Object.entries(probs).map(([k, v]) => {
+              const pci = claseInfo(k);
+              return `<div class="prob-item">
+                <div class="prob-name">${k}</div>
+                <div class="prob-val" style="color:${pci.color}">${(v * 100).toFixed(1)}%</div>
+              </div>`;
+            }).join('')}
+          </div>
+        </div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN 2 — Carrusel Imágenes de Hoy
+═══════════════════════════════════════════════════════════════ */
+let s2Items   = [];
+let s2Idx     = 0;
+let s2Timer   = null;
+
+function renderS2(payload) {
+  const body    = document.getElementById('s2-body');
+  const counter = document.getElementById('s2-counter');
+
+  if (s2Timer) clearInterval(s2Timer);
+
+  s2Items = (payload?.data || []).filter(d => d.image_url);
+  counter.textContent = `${s2Items.length} imagen${s2Items.length !== 1 ? 'es' : ''}`;
+
+  if (s2Items.length === 0) {
+    body.innerHTML = `<div class="no-data">Sin imágenes registradas hoy</div>`;
+    return;
+  }
+
+  s2Idx = 0;
+
+  const maxDots = Math.min(s2Items.length, 14);
+  const dotsHtml = Array.from({ length: maxDots }, (_, i) =>
+    `<div class="dot${i === 0 ? ' active' : ''}" data-i="${i}"></div>`
+  ).join('');
+
+  body.innerHTML = `
+    <div class="car-wrap">
+      <div class="car-stage" id="s2-stage">
+        <button class="car-btn car-prev" id="s2-prev">‹</button>
+        <img id="s2-img" src="" alt="Captura">
+        <button class="car-btn car-next" id="s2-next">›</button>
+      </div>
+      <div class="car-info" id="s2-info"></div>
+      <div class="car-dots" id="s2-dots">${dotsHtml}</div>
+    </div>
+  `;
+
+  document.getElementById('s2-prev').addEventListener('click', () => s2GoTo((s2Idx - 1 + s2Items.length) % s2Items.length));
+  document.getElementById('s2-next').addEventListener('click', () => s2GoTo((s2Idx + 1) % s2Items.length));
+  document.querySelectorAll('#s2-dots .dot').forEach(el =>
+    el.addEventListener('click', () => s2GoTo(parseInt(el.dataset.i)))
+  );
+
+  s2GoTo(0);
+  s2Timer = setInterval(() => s2GoTo((s2Idx + 1) % s2Items.length), 6000);
+}
+
+function s2GoTo(idx) {
+  s2Idx = idx;
+  const d  = s2Items[idx];
+  const ci = claseInfo(d.clase);
+
+  document.getElementById('s2-img').src = d.image_url;
+  document.getElementById('s2-info').innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
+      <div class="meta" style="min-width:0">
+        <span class="meta-lbl" style="font-size:9px">Dispositivo</span>
+        <span style="font-size:11px;font-weight:600;white-space:nowrap">${d.device_id || '—'}</span>
+      </div>
+      <div class="meta" style="min-width:0">
+        <span class="meta-lbl" style="font-size:9px">Recibida</span>
+        <span style="font-size:11px;font-weight:600;white-space:nowrap">${fmtDatetime(d.received_at)}</span>
+      </div>
+      <span class="badge ${ci.css}" style="font-size:10px;padding:3px 8px">
+        ${ci.icon} ${ci.label} · ${((d.confianza ?? 0)*100).toFixed(1)}%
+      </span>
+      <span style="margin-left:auto;font-size:10px;color:var(--muted);white-space:nowrap">${idx+1} / ${s2Items.length}</span>
+    </div>
+  `;
+
+  document.querySelectorAll('#s2-dots .dot').forEach((el, i) =>
+    el.classList.toggle('active', i === idx)
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN 3 — Carrusel Sensores por Dispositivo
+═══════════════════════════════════════════════════════════════ */
+let s3Devices = [];
+let s3Idx     = 0;
+let s3DevData = {};
+
+function renderS3(payload) {
+  const newDevices = payload?.devices || [];
+  s3DevData = payload?.data || {};
+
+  if (newDevices.length === 0) {
+    s3Devices = [];
+    document.getElementById('s3-counter').textContent = '0/0';
+    document.getElementById('s3-body').innerHTML =
+      `<div class="no-data">Sin datos de sensores</div>`;
+    return;
+  }
+
+  // Preservar dispositivo actual si sigue existiendo
+  const current = s3Devices[s3Idx];
+  s3Devices = newDevices;
+  const preserved = s3Devices.indexOf(current);
+  s3Idx = preserved >= 0 ? preserved : 0;
+
+  s3ShowDevice();
+}
+
+function s3ShowDevice() {
+  if (s3Devices.length === 0) return;
+
+  const deviceId = s3Devices[s3Idx];
+  const d = s3DevData[deviceId] || {};
+  document.getElementById('s3-counter').textContent = `${s3Idx + 1}/${s3Devices.length}`;
+
+  const valZ1 = d.valvula_z1
+    ? '<span class="valve-open">■ ABIERTA</span>'
+    : '<span class="valve-closed">□ CERRADA</span>';
+  const valZ2 = d.valvula_z2
+    ? '<span class="valve-open">■ ABIERTA</span>'
+    : '<span class="valve-closed">□ CERRADA</span>';
+
+  document.getElementById('s3-body').innerHTML = `
+    <div class="dev-slide">
+
+      <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:2px">
+        <span style="font-size:13px;font-weight:700;color:var(--blue)">${deviceId}</span>
+        <span style="font-size:10px;color:var(--muted)">${fmtDatetime(d.recorded_at)}</span>
+      </div>
+
+      <div class="sg">
+        <div class="sg-title">🌡️ Temperatura &amp; Humedad Ambiente</div>
+        <div class="sr">
+          <span class="sr-name">Temperatura</span>
+          <span class="sr-val">${n(d.temperatura, 1)} °C</span>
+          <span class="status ${statusCss(d.temp_estado)}">${d.temp_estado || '—'}</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">Humedad Ambiente</span>
+          <span class="sr-val">${n(d.hum_ambiente, 1)} %</span>
+          <span class="status ${statusCss(d.hum_amb_estado)}">${d.hum_amb_estado || '—'}</span>
+        </div>
+      </div>
+
+      <div class="sg">
+        <div class="sg-title">🌱 Humedad de Suelo &amp; Válvulas</div>
+        <div class="sr">
+          <span class="sr-name">Zona 1</span>
+          <span class="sr-val">${d.hum_suelo_z1 ?? '—'} %</span>
+          <span class="status ${statusCss(d.suelo_estado_z1)}">${d.suelo_estado_z1 || '—'}</span>
+        </div>
+        <div class="sr" style="padding-left:12px">
+          <span class="sr-name" style="font-size:10px;color:var(--muted)">Válvula Z1</span>
+          ${valZ1}
+        </div>
+        <div class="sr">
+          <span class="sr-name">Zona 2</span>
+          <span class="sr-val">${d.hum_suelo_z2 ?? '—'} %</span>
+          <span class="status ${statusCss(d.suelo_estado_z2)}">${d.suelo_estado_z2 || '—'}</span>
+        </div>
+        <div class="sr" style="padding-left:12px">
+          <span class="sr-name" style="font-size:10px;color:var(--muted)">Válvula Z2</span>
+          ${valZ2}
+        </div>
+      </div>
+
+      <div class="sg">
+        <div class="sg-title">🌫️ Calidad del Aire — MQ-135</div>
+        <div class="sr">
+          <span class="sr-name">CO₂</span>
+          <span class="sr-val">${n(d.co2_ppm, 1)} ppm</span>
+          <span class="status ${statusCss(d.co2_estado)}">${d.co2_estado || '—'}</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">CO (Monóxido)</span>
+          <span class="sr-val">${n(d.co_ppm, 4)} ppm</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">NH₃ (Amoniaco)</span>
+          <span class="sr-val">${n(d.nh3_ppm, 4)} ppm</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">Alcohol</span>
+          <span class="sr-val">${n(d.alcohol_ppm, 4)} ppm</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">Humo</span>
+          <span class="sr-val">${n(d.humo_ppm, 4)} ppm</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">Tolueno</span>
+          <span class="sr-val">${n(d.tolueno_ppm, 4)} ppm</span>
+        </div>
+        <div class="sr">
+          <span class="sr-name">Acetona</span>
+          <span class="sr-val">${n(d.acetona_ppm, 4)} ppm</span>
+        </div>
+      </div>
+
+    </div>
+  `;
+}
+
+// Botones de S3 viven en el header → listeners se registran una sola vez
+document.getElementById('s3-prev').addEventListener('click', () => {
+  if (s3Devices.length === 0) return;
+  s3Idx = (s3Idx - 1 + s3Devices.length) % s3Devices.length;
+  s3ShowDevice();
+});
+document.getElementById('s3-next').addEventListener('click', () => {
+  if (s3Devices.length === 0) return;
+  s3Idx = (s3Idx + 1) % s3Devices.length;
+  s3ShowDevice();
+});
+
+/* ═══════════════════════════════════════════════════════════════
+   SECCIÓN 4 — Promedios Globales
+═══════════════════════════════════════════════════════════════ */
+function renderS4(payload) {
+  const body = document.getElementById('s4-body');
+  const tag  = document.getElementById('s4-tag');
+
+  const d = payload?.data;
+  if (!d) {
+    tag.textContent = 'sin datos';
+    body.innerHTML = `<div class="no-data">Sin lecturas en la última hora</div>`;
+    return;
+  }
+
+  tag.textContent = `${d.device_count} disp. · última hora`;
+
+  body.innerHTML = `
+    <div class="avg-grid">
+      <div class="avg-card">
+        <div class="avg-lbl">🌡️ Temperatura</div>
+        <div class="avg-val" style="color:var(--blue)">${n(d.avg_temperatura, 1)}</div>
+        <div class="avg-unit">°C — ${d.device_count} disp.</div>
+      </div>
+      <div class="avg-card">
+        <div class="avg-lbl">💧 Hum. Ambiente</div>
+        <div class="avg-val" style="color:var(--blue)">${n(d.avg_hum_ambiente, 1)}</div>
+        <div class="avg-unit">% — ${d.device_count} disp.</div>
+      </div>
+      <div class="avg-card">
+        <div class="avg-lbl">🌫️ CO₂</div>
+        <div class="avg-val" style="color:var(--violet)">${n(d.avg_co2_ppm, 1)}</div>
+        <div class="avg-unit">ppm — ${d.device_count} disp.</div>
+      </div>
+      <div class="avg-card">
+        <div class="avg-lbl">🌱 Suelo Zona 1</div>
+        <div class="avg-val" style="color:var(--green)">${n(d.avg_hum_suelo_z1, 1)}</div>
+        <div class="avg-unit">% — ${d.device_count} disp.</div>
+      </div>
+      <div class="avg-card">
+        <div class="avg-lbl">🌱 Suelo Zona 2</div>
+        <div class="avg-val" style="color:var(--green)">${n(d.avg_hum_suelo_z2, 1)}</div>
+        <div class="avg-unit">% — ${d.device_count} disp.</div>
+      </div>
+      <div class="avg-card">
+        <div class="avg-lbl">🌿 Suelo Global</div>
+        <div class="avg-val" style="color:#4ade80">${n(d.avg_hum_suelo_global, 1)}</div>
+        <div class="avg-unit">% (Z1+Z2)/2 · ${d.device_count} disp.</div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="sg">
+      <div class="sg-title">⚗️ Gases Traza — ppm promedio (${d.device_count} dispositivos)</div>
+      <div class="gas-row">
+        <span class="gas-name">CO (Monóxido)</span>
+        <span class="gas-val">${n(d.avg_co_ppm, 4)}</span>
+      </div>
+      <div class="gas-row">
+        <span class="gas-name">NH₃ (Amoniaco)</span>
+        <span class="gas-val">${n(d.avg_nh3_ppm, 4)}</span>
+      </div>
+      <div class="gas-row">
+        <span class="gas-name">Alcohol</span>
+        <span class="gas-val">${n(d.avg_alcohol_ppm, 4)}</span>
+      </div>
+      <div class="gas-row">
+        <span class="gas-name">Humo</span>
+        <span class="gas-val">${n(d.avg_humo_ppm, 4)}</span>
+      </div>
+      <div class="gas-row">
+        <span class="gas-name">Tolueno</span>
+        <span class="gas-val">${n(d.avg_tolueno_ppm, 4)}</span>
+      </div>
+      <div class="gas-row">
+        <span class="gas-name">Acetona</span>
+        <span class="gas-val">${n(d.avg_acetona_ppm, 4)}</span>
+      </div>
+    </div>
+
+    <div style="text-align:right;font-size:9px;color:var(--muted);margin-top:6px">
+      Última lectura: ${fmtDatetime(d.newest_reading)} · ${d.reading_count} registros
+    </div>
+  `;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   MAIN LOOP
+═══════════════════════════════════════════════════════════════ */
+async function refresh() {
+  const { latest, today, sensors, averages } = await fetchAll();
+  renderS1(latest);
+  renderS2(today);
+  renderS3(sensors);
+  renderS4(averages);
+  document.getElementById('last-update').textContent =
+    'Act. ' + fmtTime(new Date().toISOString());
+}
+
+startClock();
+refresh();
+setInterval(refresh, 30000);
+</script>
+</body>
+</html>
