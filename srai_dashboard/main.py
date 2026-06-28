@@ -1,6 +1,9 @@
 import io
+import json
 import logging
+import math
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime
 from decimal import Decimal
@@ -26,12 +29,35 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "srai-images")
 
 db_pool: asyncpg.Pool = None
 
+# Regex to replace JSON-invalid NaN/Infinity literals before parsing
+_NAN_RE = re.compile(r'\bNaN\b')
+
+
+def _safe_json_loads(s: str):
+    """json.loads tolerante a NaN (convierte a null)."""
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        return json.loads(_NAN_RE.sub('null', s))
+
+
+async def _init_conn(conn):
+    """Registra codec JSONB explícitamente para garantizar decodificación a dict."""
+    await conn.set_type_codec(
+        'jsonb',
+        encoder=json.dumps,
+        decoder=_safe_json_loads,
+        schema='pg_catalog',
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
-    db_pool = await asyncpg.create_pool(DATABASE_URL, min_size=2, max_size=10)
-    logger.info("Pool de BD inicializado")
+    db_pool = await asyncpg.create_pool(
+        DATABASE_URL, min_size=2, max_size=10, init=_init_conn
+    )
+    logger.info("Pool de BD inicializado con codec JSONB")
     yield
     await db_pool.close()
 
@@ -44,13 +70,31 @@ def _minio() -> Minio:
     return Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS, secret_key=MINIO_SECRET, secure=False)
 
 
+def _clean_probs(v) -> dict:
+    """Normaliza el campo probabilidades a dict con valores float finitos."""
+    if isinstance(v, str):
+        try:
+            v = _safe_json_loads(v)
+        except Exception:
+            return {}
+    if not isinstance(v, dict):
+        return {}
+    return {
+        ck: round(float(cv), 6)
+        for ck, cv in v.items()
+        if cv is not None and isinstance(cv, (int, float)) and math.isfinite(float(cv))
+    }
+
+
 def _to_dict(record) -> dict:
     d = dict(record)
-    for k, v in d.items():
+    for k, v in list(d.items()):
         if isinstance(v, datetime):
             d[k] = v.isoformat()
         elif isinstance(v, Decimal):
             d[k] = float(v)
+        elif k == 'probabilidades':
+            d[k] = _clean_probs(v)
     return d
 
 
@@ -72,7 +116,7 @@ async def proxy_image(path: str):
         return StreamingResponse(
             io.BytesIO(data),
             media_type="image/jpeg",
-            headers={"Cache-Control": "public, max-age=3600"},
+            headers={"Cache-Control": "no-cache"},
         )
     except S3Error as e:
         raise HTTPException(status_code=404, detail=f"Imagen no encontrada: {e}")

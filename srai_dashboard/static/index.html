@@ -247,7 +247,8 @@ header {
   flex-direction: column;
   gap: 9px;
   min-width: 0;
-  justify-content: center;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .conf-row {
@@ -670,7 +671,17 @@ function renderS1(payload) {
 
   const ci   = claseInfo(d.clase);
   const conf = ((d.confianza ?? 0) * 100).toFixed(1);
-  const probs = d.probabilidades || {};
+
+  // Normalizar probabilidades: garantizar dict con valores numéricos finitos
+  let rawProbs = d.probabilidades;
+  if (typeof rawProbs === 'string') {
+    try { rawProbs = JSON.parse(rawProbs); } catch { rawProbs = {}; }
+  }
+  if (!rawProbs || typeof rawProbs !== 'object' || Array.isArray(rawProbs)) rawProbs = {};
+  const probs = Object.fromEntries(
+    Object.entries(rawProbs).filter(([, v]) => typeof v === 'number' && isFinite(v))
+  );
+
   devTag.textContent = d.device_id || '—';
 
   body.innerHTML = `
@@ -739,50 +750,78 @@ function renderS2(payload) {
 
   if (s2Timer) clearInterval(s2Timer);
 
-  s2Items = (payload?.data || []).filter(d => d.image_url);
-  counter.textContent = `${s2Items.length} imagen${s2Items.length !== 1 ? 'es' : ''}`;
+  const newItems = (payload?.data || []).filter(d => d.image_url);
+  counter.textContent = `${newItems.length} imagen${newItems.length !== 1 ? 'es' : ''}`;
 
-  if (s2Items.length === 0) {
+  if (newItems.length === 0) {
+    s2Items = [];
     body.innerHTML = `<div class="no-data">Sin imágenes registradas hoy</div>`;
     return;
   }
 
-  s2Idx = 0;
+  // Preservar posición actual si el item sigue existiendo tras el refresco
+  const currentId = s2Items[s2Idx]?.capture_id;
+  s2Items = newItems;
+  const preserved = s2Items.findIndex(d => d.capture_id === currentId);
+  s2Idx = preserved >= 0 ? preserved : 0;
 
   const maxDots = Math.min(s2Items.length, 14);
   const dotsHtml = Array.from({ length: maxDots }, (_, i) =>
-    `<div class="dot${i === 0 ? ' active' : ''}" data-i="${i}"></div>`
+    `<div class="dot" data-i="${i}"></div>`
   ).join('');
 
-  body.innerHTML = `
-    <div class="car-wrap">
-      <div class="car-stage" id="s2-stage">
-        <button class="car-btn car-prev" id="s2-prev">‹</button>
-        <img id="s2-img" src="" alt="Captura">
-        <button class="car-btn car-next" id="s2-next">›</button>
+  // Solo inyectar el DOM si no existe ya (evita parpadeo en refrescos)
+  if (!document.getElementById('s2-img')) {
+    body.innerHTML = `
+      <div class="car-wrap">
+        <div class="car-stage" id="s2-stage">
+          <button class="car-btn car-prev" id="s2-prev">‹</button>
+          <img id="s2-img" src="" alt="Captura">
+          <button class="car-btn car-next" id="s2-next">›</button>
+        </div>
+        <div class="car-info" id="s2-info"></div>
+        <div class="car-dots" id="s2-dots">${dotsHtml}</div>
       </div>
-      <div class="car-info" id="s2-info"></div>
-      <div class="car-dots" id="s2-dots">${dotsHtml}</div>
-    </div>
-  `;
+    `;
+    document.getElementById('s2-prev').addEventListener('click', () =>
+      s2GoTo((s2Idx - 1 + s2Items.length) % s2Items.length));
+    document.getElementById('s2-next').addEventListener('click', () =>
+      s2GoTo((s2Idx + 1) % s2Items.length));
+    document.getElementById('s2-img').addEventListener('error', () => {
+      // Imagen eliminada de MinIO o no disponible → saltar a la siguiente
+      s2Items.splice(s2Idx, 1);
+      if (s2Items.length === 0) {
+        body.innerHTML = `<div class="no-data">Sin imágenes disponibles</div>`;
+        return;
+      }
+      s2Idx = s2Idx % s2Items.length;
+      s2GoTo(s2Idx);
+    });
+  } else {
+    // Actualizar los dots si cambió la cantidad
+    const dotsEl = document.getElementById('s2-dots');
+    if (dotsEl) dotsEl.innerHTML = dotsHtml;
+  }
 
-  document.getElementById('s2-prev').addEventListener('click', () => s2GoTo((s2Idx - 1 + s2Items.length) % s2Items.length));
-  document.getElementById('s2-next').addEventListener('click', () => s2GoTo((s2Idx + 1) % s2Items.length));
   document.querySelectorAll('#s2-dots .dot').forEach(el =>
     el.addEventListener('click', () => s2GoTo(parseInt(el.dataset.i)))
   );
 
-  s2GoTo(0);
+  s2GoTo(s2Idx);
   s2Timer = setInterval(() => s2GoTo((s2Idx + 1) % s2Items.length), 6000);
 }
 
 function s2GoTo(idx) {
+  if (s2Items.length === 0) return;
   s2Idx = idx;
   const d  = s2Items[idx];
   const ci = claseInfo(d.clase);
 
-  document.getElementById('s2-img').src = d.image_url;
-  document.getElementById('s2-info').innerHTML = `
+  const imgEl = document.getElementById('s2-img');
+  if (imgEl) imgEl.src = d.image_url + '?t=' + Date.now(); // evita caché del browser
+
+  const infoEl = document.getElementById('s2-info');
+  if (infoEl) infoEl.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;width:100%">
       <div class="meta" style="min-width:0">
         <span class="meta-lbl" style="font-size:9px">Dispositivo</span>
