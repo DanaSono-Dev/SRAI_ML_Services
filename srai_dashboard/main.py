@@ -21,11 +21,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://srai:srai_pass@postgres:5432/srai_db")
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
-MINIO_ACCESS = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "srai-images")
+DATABASE_URL        = os.getenv("DATABASE_URL",        "postgresql://srai:srai_pass@postgres:5432/srai_db")
+MINIO_ENDPOINT      = os.getenv("MINIO_ENDPOINT",      "minio:9000")
+MINIO_ACCESS        = os.getenv("MINIO_ACCESS_KEY",    "minioadmin")
+MINIO_SECRET        = os.getenv("MINIO_SECRET_KEY",    "minioadmin123")
+MINIO_BUCKET        = os.getenv("MINIO_BUCKET",        "srai-images")
+MAX_CAPTURES_TODAY  = int(os.getenv("MAX_CAPTURES_TODAY", "150"))
 
 db_pool: asyncpg.Pool = None
 
@@ -146,7 +147,7 @@ async def latest_inference():
 
 @app.get("/api/today-captures")
 async def today_captures():
-    """Todas las capturas del día actual (máx. 50), más recientes primero."""
+    """Capturas del día actual, límite configurable por MAX_CAPTURES_TODAY."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT capture_id, device_id, received_at, processed_at,
@@ -154,8 +155,8 @@ async def today_captures():
             FROM captures
             WHERE DATE(received_at) = CURRENT_DATE
             ORDER BY received_at DESC
-            LIMIT 50
-        """)
+            LIMIT $1
+        """, MAX_CAPTURES_TODAY)
     captures = []
     for row in rows:
         d = _to_dict(row)

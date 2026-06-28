@@ -765,7 +765,7 @@ function renderS2(payload) {
   const preserved = s2Items.findIndex(d => d.capture_id === currentId);
   s2Idx = preserved >= 0 ? preserved : 0;
 
-  const maxDots = Math.min(s2Items.length, 14);
+  const maxDots = Math.min(s2Items.length, 10);
   const dotsHtml = Array.from({ length: maxDots }, (_, i) =>
     `<div class="dot" data-i="${i}"></div>`
   ).join('');
