@@ -40,21 +40,18 @@ _CREATE_TABLES = """
 CREATE TABLE IF NOT EXISTS sensor_readings (
     id              SERIAL       PRIMARY KEY,
     device_id       VARCHAR(64)  NOT NULL,
+    zona            VARCHAR(32)  NOT NULL,
     recorded_at     TIMESTAMPTZ  DEFAULT NOW(),
-    -- DHT22
+    -- Cada zona trae su propio DHT
     temperatura     FLOAT,
     temp_estado     VARCHAR(16),
     hum_ambiente    FLOAT,
     hum_amb_estado  VARCHAR(16),
-    -- Sensor de suelo zona 1
-    hum_suelo_z1    INTEGER,
-    suelo_estado_z1 VARCHAR(16),
-    valvula_z1      BOOLEAN,
-    -- Sensor de suelo zona 2
-    hum_suelo_z2    INTEGER,
-    suelo_estado_z2 VARCHAR(16),
-    valvula_z2      BOOLEAN,
-    -- MQ-135
+    -- Sensor de suelo y válvula de la zona
+    hum_suelo       INTEGER,
+    suelo_estado    VARCHAR(16),
+    valvula         BOOLEAN,
+    -- Cada zona trae su propio MQ-135
     co2_ppm         FLOAT,
     co2_estado      VARCHAR(16),
     co_ppm          FLOAT,
@@ -72,8 +69,8 @@ CREATE TABLE IF NOT EXISTS sensor_alerts (
     mensaje     TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_readings_device_time
-    ON sensor_readings(device_id, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_readings_device_zona_time
+    ON sensor_readings(device_id, zona, recorded_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_alerts_device_time
     ON sensor_alerts(device_id, alerted_at DESC);
@@ -177,52 +174,59 @@ def _handle_alerta(msg, device_id: str):
 # ---------------------------------------------------------------------------
 
 async def _guardar_lectura(device_id: str, data: dict):
+    """
+    Inserta una fila por cada zona presente en el payload. El ESP32 ahora
+    puede traer N zonas (zona1..zonaN) y cada una incluye su propio set
+    completo de sensores (DHT, suelo/válvula, MQ-135).
+    """
     if db_pool is None:
         return
 
-    zona1 = data.get("zona1", {})
-    zona2 = data.get("zona2", {})
+    zonas = {
+        k: v for k, v in data.items()
+        if k.lower().startswith("zona") and isinstance(v, dict)
+    }
+    if not zonas:
+        logger.warning("Mensaje sin zonas reconocibles | device=%s", device_id)
+        return
 
     try:
         async with db_pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO sensor_readings (
-                    device_id,
-                    temperatura,     temp_estado,
-                    hum_ambiente,    hum_amb_estado,
-                    hum_suelo_z1,    suelo_estado_z1, valvula_z1,
-                    hum_suelo_z2,    suelo_estado_z2, valvula_z2,
-                    co2_ppm,         co2_estado,
-                    co_ppm,          nh3_ppm,         alcohol_ppm,
-                    humo_ppm,        tolueno_ppm,     acetona_ppm
-                ) VALUES (
-                    $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19
+            for zona_nombre, z in zonas.items():
+                await conn.execute(
+                    """
+                    INSERT INTO sensor_readings (
+                        device_id,    zona,
+                        temperatura,  temp_estado,
+                        hum_ambiente, hum_amb_estado,
+                        hum_suelo,    suelo_estado,  valvula,
+                        co2_ppm,      co2_estado,
+                        co_ppm,       nh3_ppm,        alcohol_ppm,
+                        humo_ppm,     tolueno_ppm,    acetona_ppm
+                    ) VALUES (
+                        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17
+                    )
+                    """,
+                    device_id, zona_nombre,
+                    z.get("temperatura"),
+                    z.get("temp_estado"),
+                    z.get("hum_ambiente"),
+                    z.get("hum_amb_estado"),
+                    z.get("hum_suelo"),
+                    z.get("suelo_estado"),
+                    z.get("valvula") == "ABIERTA",
+                    z.get("co2_ppm"),
+                    z.get("co2_estado"),
+                    z.get("co_ppm"),
+                    z.get("nh3_ppm"),
+                    z.get("alcohol_ppm"),
+                    z.get("humo_ppm"),
+                    z.get("tolueno_ppm"),
+                    z.get("acetona_ppm"),
                 )
-                """,
-                device_id,
-                data.get("temperatura"),
-                data.get("temp_estado"),
-                data.get("hum_ambiente"),
-                data.get("hum_amb_estado"),
-                zona1.get("hum_suelo"),
-                zona1.get("suelo_estado"),
-                zona1.get("valvula") == "ABIERTA",
-                zona2.get("hum_suelo"),
-                zona2.get("suelo_estado"),
-                zona2.get("valvula") == "ABIERTA",
-                data.get("co2_ppm"),
-                data.get("co2_estado"),
-                data.get("co_ppm"),
-                data.get("nh3_ppm"),
-                data.get("alcohol_ppm"),
-                data.get("humo_ppm"),
-                data.get("tolueno_ppm"),
-                data.get("acetona_ppm"),
-            )
         logger.info(
-            "Lectura guardada | device=%s temp=%.1f co2=%.1f",
-            device_id, data.get("temperatura") or 0, data.get("co2_ppm") or 0,
+            "Lectura guardada | device=%s zonas=%s",
+            device_id, list(zonas.keys()),
         )
     except Exception:
         logger.exception("Error guardando lectura en BD | device=%s", device_id)
@@ -282,19 +286,27 @@ app = FastAPI(title="SRAI Sensor Service", version="1.0.0", lifespan=lifespan)
 @app.get("/v1/readings")
 async def get_readings(
     device_id: str            = Query(..., description="MQTT_CLIENT_ID del ESP32"),
+    zona: Optional[str]       = Query(default=None, description="Filtrar por zona, ej. zona1"),
     period: str               = Query(default="day", pattern="^(day|week|month)$"),
     fecha: Optional[date]     = Query(default=None, description="YYYY-MM-DD (default: hoy)"),
     limit: int                = Query(default=100, le=1000),
 ):
-    """Lecturas históricas de un dispositivo por período."""
+    """Lecturas históricas de un dispositivo (opcionalmente filtradas por zona) por período."""
     ref_dt = datetime.combine(fecha or date.today(), datetime.min.time())
     where  = _periodo_where(period, "recorded_at")
 
-    rows = await db_pool.fetch(
-        f"SELECT * FROM sensor_readings WHERE device_id=$1 AND {where} "
-        f"ORDER BY recorded_at DESC LIMIT $3",
-        device_id, ref_dt, limit,
-    )
+    if zona:
+        rows = await db_pool.fetch(
+            f"SELECT * FROM sensor_readings WHERE device_id=$1 AND {where} AND zona=$3 "
+            f"ORDER BY recorded_at DESC LIMIT $4",
+            device_id, ref_dt, zona, limit,
+        )
+    else:
+        rows = await db_pool.fetch(
+            f"SELECT * FROM sensor_readings WHERE device_id=$1 AND {where} "
+            f"ORDER BY recorded_at DESC LIMIT $3",
+            device_id, ref_dt, limit,
+        )
     return [_to_dict(r) for r in rows]
 
 
@@ -302,14 +314,15 @@ async def get_readings(
 async def get_latest(
     device_id: str = Query(..., description="MQTT_CLIENT_ID del ESP32"),
 ):
-    """Última lectura registrada del dispositivo."""
-    row = await db_pool.fetchrow(
-        "SELECT * FROM sensor_readings WHERE device_id=$1 ORDER BY recorded_at DESC LIMIT 1",
+    """Última lectura registrada de cada zona del dispositivo."""
+    rows = await db_pool.fetch(
+        "SELECT DISTINCT ON (zona) * FROM sensor_readings "
+        "WHERE device_id=$1 ORDER BY zona, recorded_at DESC",
         device_id,
     )
-    if not row:
+    if not rows:
         raise HTTPException(status_code=404, detail="Sin lecturas para este dispositivo")
-    return _to_dict(row)
+    return [_to_dict(r) for r in rows]
 
 
 @app.get("/v1/readings/summary")
@@ -319,7 +332,7 @@ async def get_summary(
     fecha: Optional[date]     = Query(default=None, description="YYYY-MM-DD (default: hoy)"),
 ):
     """
-    Promedios agrupados:
+    Promedios agrupados (todas las zonas combinadas, no se distingue por zona):
     - day   → por hora
     - week  → por día
     - month → por día
@@ -333,10 +346,10 @@ async def get_summary(
         SELECT
             date_trunc('{trunc}', recorded_at)     AS periodo,
             COUNT(*)                                AS registros,
+            COUNT(DISTINCT zona)                    AS zonas,
             ROUND(AVG(temperatura)::numeric,  1)    AS temp_promedio,
             ROUND(AVG(hum_ambiente)::numeric, 1)    AS hum_amb_promedio,
-            ROUND(AVG(hum_suelo_z1)::numeric, 1)   AS suelo_z1_promedio,
-            ROUND(AVG(hum_suelo_z2)::numeric, 1)   AS suelo_z2_promedio,
+            ROUND(AVG(hum_suelo)::numeric,    1)    AS suelo_promedio,
             ROUND(AVG(co2_ppm)::numeric,      1)    AS co2_promedio,
             ROUND(AVG(nh3_ppm)::numeric,      2)    AS nh3_promedio
         FROM sensor_readings
@@ -370,12 +383,13 @@ async def get_alerts(
 
 @app.get("/v1/devices")
 async def list_devices():
-    """Lista todos los ESP32 que han enviado datos."""
+    """Lista todos los ESP32 que han enviado datos, con su cantidad de zonas."""
     rows = await db_pool.fetch(
         """
         SELECT
             device_id,
             COUNT(*)                        AS total_lecturas,
+            COUNT(DISTINCT zona)            AS zonas,
             MAX(recorded_at)                AS ultima_lectura,
             MIN(recorded_at)                AS primera_lectura
         FROM sensor_readings

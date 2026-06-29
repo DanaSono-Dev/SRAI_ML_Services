@@ -447,12 +447,28 @@ header {
 .valve-open   { color: var(--green); font-weight: 700; font-size: 11px; }
 .valve-closed { color: var(--muted); font-size: 11px; }
 
+.zona-block {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px;
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.zona-block-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--blue);
+}
+
 /* ═══════════════════════════════════════════
    SECTION 4 — Averages
 ═══════════════════════════════════════════ */
 .avg-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
 }
 
@@ -1015,94 +1031,79 @@ function renderS3(payload) {
 function s3ShowDevice() {
   if (s3Devices.length === 0) return;
 
-  const deviceId = s3Devices[s3Idx];
-  const d = s3DevData[deviceId] || {};
+  const deviceId  = s3Devices[s3Idx];
+  const zonas     = s3DevData[deviceId] || {};
+  const zonaKeys  = Object.keys(zonas).sort();
   document.getElementById('s3-counter').textContent = `${s3Idx + 1}/${s3Devices.length}`;
 
-  const valZ1 = d.valvula_z1
-    ? '<span class="valve-open">■ ABIERTA</span>'
-    : '<span class="valve-closed">□ CERRADA</span>';
-  const valZ2 = d.valvula_z2
-    ? '<span class="valve-open">■ ABIERTA</span>'
-    : '<span class="valve-closed">□ CERRADA</span>';
+  if (zonaKeys.length === 0) {
+    document.getElementById('s3-body').innerHTML = `<div class="no-data">Sin zonas para ${deviceId}</div>`;
+    return;
+  }
+
+  const latestUpdate = zonaKeys
+    .map(z => zonas[z].recorded_at)
+    .filter(Boolean)
+    .sort()
+    .pop();
+
+  const zonasHtml = zonaKeys.map(zonaKey => {
+    const d = zonas[zonaKey];
+    const valv = d.valvula
+      ? '<span class="valve-open">■ ABIERTA</span>'
+      : '<span class="valve-closed">□ CERRADA</span>';
+
+    return `
+      <div class="zona-block">
+        <div class="zona-block-title">🌍 ${zonaKey.toUpperCase()}</div>
+
+        <div class="sg">
+          <div class="sr">
+            <span class="sr-name">Temperatura</span>
+            <span class="sr-val">${n(d.temperatura, 1)} °C</span>
+            <span class="status ${statusCss(d.temp_estado)}">${d.temp_estado || '—'}</span>
+          </div>
+          <div class="sr">
+            <span class="sr-name">Humedad Ambiente</span>
+            <span class="sr-val">${n(d.hum_ambiente, 1)} %</span>
+            <span class="status ${statusCss(d.hum_amb_estado)}">${d.hum_amb_estado || '—'}</span>
+          </div>
+          <div class="sr">
+            <span class="sr-name">Suelo</span>
+            <span class="sr-val">${d.hum_suelo ?? '—'} %</span>
+            <span class="status ${statusCss(d.suelo_estado)}">${d.suelo_estado || '—'}</span>
+          </div>
+          <div class="sr" style="padding-left:12px">
+            <span class="sr-name" style="font-size:10px;color:var(--muted)">Válvula</span>
+            ${valv}
+          </div>
+        </div>
+
+        <div class="sg">
+          <div class="sg-title">🌫️ Calidad del Aire — MQ-135</div>
+          <div class="sr">
+            <span class="sr-name">CO₂</span>
+            <span class="sr-val">${n(d.co2_ppm, 1)} ppm</span>
+            <span class="status ${statusCss(d.co2_estado)}">${d.co2_estado || '—'}</span>
+          </div>
+          <div class="sr"><span class="sr-name">CO (Monóxido)</span><span class="sr-val">${n(d.co_ppm, 4)} ppm</span></div>
+          <div class="sr"><span class="sr-name">NH₃ (Amoniaco)</span><span class="sr-val">${n(d.nh3_ppm, 4)} ppm</span></div>
+          <div class="sr"><span class="sr-name">Alcohol</span><span class="sr-val">${n(d.alcohol_ppm, 4)} ppm</span></div>
+          <div class="sr"><span class="sr-name">Humo</span><span class="sr-val">${n(d.humo_ppm, 4)} ppm</span></div>
+          <div class="sr"><span class="sr-name">Tolueno</span><span class="sr-val">${n(d.tolueno_ppm, 4)} ppm</span></div>
+          <div class="sr"><span class="sr-name">Acetona</span><span class="sr-val">${n(d.acetona_ppm, 4)} ppm</span></div>
+        </div>
+      </div>
+    `;
+  }).join('');
 
   document.getElementById('s3-body').innerHTML = `
     <div class="dev-slide">
-
       <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:2px">
         <span style="font-size:13px;font-weight:700;color:var(--blue)">${deviceId}</span>
-        <span style="font-size:10px;color:var(--muted)">${fmtDatetime(d.recorded_at)}</span>
+        <span style="font-size:10px;color:var(--muted)">${zonaKeys.length} zona${zonaKeys.length !== 1 ? 's' : ''} · ${fmtDatetime(latestUpdate)}</span>
       </div>
-
-      <div class="sg">
-        <div class="sg-title">🌡️ Temperatura &amp; Humedad Ambiente</div>
-        <div class="sr">
-          <span class="sr-name">Temperatura</span>
-          <span class="sr-val">${n(d.temperatura, 1)} °C</span>
-          <span class="status ${statusCss(d.temp_estado)}">${d.temp_estado || '—'}</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">Humedad Ambiente</span>
-          <span class="sr-val">${n(d.hum_ambiente, 1)} %</span>
-          <span class="status ${statusCss(d.hum_amb_estado)}">${d.hum_amb_estado || '—'}</span>
-        </div>
-      </div>
-
-      <div class="sg">
-        <div class="sg-title">🌱 Humedad de Suelo &amp; Válvulas</div>
-        <div class="sr">
-          <span class="sr-name">Zona 1</span>
-          <span class="sr-val">${d.hum_suelo_z1 ?? '—'} %</span>
-          <span class="status ${statusCss(d.suelo_estado_z1)}">${d.suelo_estado_z1 || '—'}</span>
-        </div>
-        <div class="sr" style="padding-left:12px">
-          <span class="sr-name" style="font-size:10px;color:var(--muted)">Válvula Z1</span>
-          ${valZ1}
-        </div>
-        <div class="sr">
-          <span class="sr-name">Zona 2</span>
-          <span class="sr-val">${d.hum_suelo_z2 ?? '—'} %</span>
-          <span class="status ${statusCss(d.suelo_estado_z2)}">${d.suelo_estado_z2 || '—'}</span>
-        </div>
-        <div class="sr" style="padding-left:12px">
-          <span class="sr-name" style="font-size:10px;color:var(--muted)">Válvula Z2</span>
-          ${valZ2}
-        </div>
-      </div>
-
-      <div class="sg">
-        <div class="sg-title">🌫️ Calidad del Aire — MQ-135</div>
-        <div class="sr">
-          <span class="sr-name">CO₂</span>
-          <span class="sr-val">${n(d.co2_ppm, 1)} ppm</span>
-          <span class="status ${statusCss(d.co2_estado)}">${d.co2_estado || '—'}</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">CO (Monóxido)</span>
-          <span class="sr-val">${n(d.co_ppm, 4)} ppm</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">NH₃ (Amoniaco)</span>
-          <span class="sr-val">${n(d.nh3_ppm, 4)} ppm</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">Alcohol</span>
-          <span class="sr-val">${n(d.alcohol_ppm, 4)} ppm</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">Humo</span>
-          <span class="sr-val">${n(d.humo_ppm, 4)} ppm</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">Tolueno</span>
-          <span class="sr-val">${n(d.tolueno_ppm, 4)} ppm</span>
-        </div>
-        <div class="sr">
-          <span class="sr-name">Acetona</span>
-          <span class="sr-val">${n(d.acetona_ppm, 4)} ppm</span>
-        </div>
-      </div>
-
+      ${zonasHtml}
     </div>
   `;
 }
@@ -1147,44 +1148,34 @@ function renderS4Avg(payload) {
     return;
   }
 
-  if (tag) tag.textContent = `${d.device_count} disp. · última hora`;
+  if (tag) tag.textContent = `${d.device_count} disp. · ${d.zone_count} zonas · última hora`;
 
   el.innerHTML = `
     <div class="avg-grid">
       <div class="avg-card">
         <div class="avg-lbl">🌡️ Temperatura</div>
         <div class="avg-val" style="color:var(--blue)">${n(d.avg_temperatura, 1)}</div>
-        <div class="avg-unit">°C — ${d.device_count} disp.</div>
+        <div class="avg-unit">°C — ${d.zone_count} zonas</div>
       </div>
       <div class="avg-card">
         <div class="avg-lbl">💧 Hum. Ambiente</div>
         <div class="avg-val" style="color:var(--blue)">${n(d.avg_hum_ambiente, 1)}</div>
-        <div class="avg-unit">% — ${d.device_count} disp.</div>
+        <div class="avg-unit">% — ${d.zone_count} zonas</div>
       </div>
       <div class="avg-card">
         <div class="avg-lbl">🌫️ CO₂</div>
         <div class="avg-val" style="color:var(--violet)">${n(d.avg_co2_ppm, 1)}</div>
-        <div class="avg-unit">ppm — ${d.device_count} disp.</div>
+        <div class="avg-unit">ppm — ${d.zone_count} zonas</div>
       </div>
       <div class="avg-card">
-        <div class="avg-lbl">🌱 Suelo Zona 1</div>
-        <div class="avg-val" style="color:var(--green)">${n(d.avg_hum_suelo_z1, 1)}</div>
-        <div class="avg-unit">% — ${d.device_count} disp.</div>
-      </div>
-      <div class="avg-card">
-        <div class="avg-lbl">🌱 Suelo Zona 2</div>
-        <div class="avg-val" style="color:var(--green)">${n(d.avg_hum_suelo_z2, 1)}</div>
-        <div class="avg-unit">% — ${d.device_count} disp.</div>
-      </div>
-      <div class="avg-card">
-        <div class="avg-lbl">🌿 Suelo Global</div>
-        <div class="avg-val" style="color:#4ade80">${n(d.avg_hum_suelo_global, 1)}</div>
-        <div class="avg-unit">% (Z1+Z2)/2 · ${d.device_count} disp.</div>
+        <div class="avg-lbl">🌱 Humedad de Suelo</div>
+        <div class="avg-val" style="color:var(--green)">${n(d.avg_hum_suelo, 1)}</div>
+        <div class="avg-unit">% — ${d.zone_count} zonas</div>
       </div>
     </div>
     <div class="divider"></div>
     <div class="sg">
-      <div class="sg-title">⚗️ Gases Traza — ppm (${d.device_count} disp.)</div>
+      <div class="sg-title">⚗️ Gases Traza — ppm (${d.device_count} disp. · ${d.zone_count} zonas)</div>
       <div class="gas-row"><span class="gas-name">CO (Monóxido)</span><span class="gas-val">${n(d.avg_co_ppm, 4)}</span></div>
       <div class="gas-row"><span class="gas-name">NH₃ (Amoniaco)</span><span class="gas-val">${n(d.avg_nh3_ppm, 4)}</span></div>
       <div class="gas-row"><span class="gas-name">Alcohol</span><span class="gas-val">${n(d.avg_alcohol_ppm, 4)}</span></div>
@@ -1221,15 +1212,14 @@ function renderS4Hist(sensors, inference) {
         <table class="hist-table">
           <thead><tr>
             <th>Período</th><th>Temp °C</th><th>H.Amb %</th>
-            <th>Suelo Z1</th><th>Suelo Z2</th><th>CO₂ ppm</th>
+            <th>Suelo %</th><th>CO₂ ppm</th>
           </tr></thead>
           <tbody>
             ${sRows.slice(0, 20).map(r => `<tr>
               <td>${fmtP(r.periodo)}</td>
               <td style="color:var(--blue)">${n(r.avg_temperatura,1)}</td>
               <td style="color:var(--blue)">${n(r.avg_hum_ambiente,1)}</td>
-              <td style="color:var(--green)">${n(r.avg_hum_suelo_z1,1)}</td>
-              <td style="color:var(--green)">${n(r.avg_hum_suelo_z2,1)}</td>
+              <td style="color:var(--green)">${n(r.avg_hum_suelo,1)}</td>
               <td style="color:var(--violet)">${n(r.avg_co2_ppm,1)}</td>
             </tr>`).join('')}
           </tbody>

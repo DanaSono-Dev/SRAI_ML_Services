@@ -251,41 +251,45 @@ async def today_captures():
 
 @app.get("/api/sensors/all-latest")
 async def sensors_all_latest():
-    """Última lectura de cada dispositivo ESP32 registrado."""
+    """Última lectura de cada zona de cada dispositivo ESP32 registrado."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
-            SELECT DISTINCT ON (device_id) *
+            SELECT DISTINCT ON (device_id, zona) *
             FROM sensor_readings
-            ORDER BY device_id, recorded_at DESC
+            ORDER BY device_id, zona, recorded_at DESC
         """)
     devices = {}
     for row in rows:
         d = _to_dict(row)
-        devices[d["device_id"]] = d
+        devices.setdefault(d["device_id"], {})[d["zona"]] = d
     return {"data": devices, "devices": sorted(devices.keys())}
 
 
 @app.get("/api/sensors/averages")
 async def sensors_averages():
-    """Promedio de sensores homólogos entre todos los ESP32 (última hora)."""
+    """
+    Promedio general de cada tipo de sensor entre TODAS las zonas de TODOS
+    los ESP32 registrados (última hora). No se distingue por zona: con N
+    zonas por dispositivo y N variable entre dispositivos, el promedio
+    relevante es el global por tipo de sensor.
+    """
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("""
             SELECT
-                COUNT(DISTINCT device_id)                                               AS device_count,
-                COUNT(*)                                                                AS reading_count,
-                ROUND(AVG(temperatura)::numeric,    2)                                  AS avg_temperatura,
-                ROUND(AVG(hum_ambiente)::numeric,   2)                                  AS avg_hum_ambiente,
-                ROUND(AVG(hum_suelo_z1)::numeric,   1)                                  AS avg_hum_suelo_z1,
-                ROUND(AVG(hum_suelo_z2)::numeric,   1)                                  AS avg_hum_suelo_z2,
-                ROUND(AVG((hum_suelo_z1::float + hum_suelo_z2::float) / 2)::numeric, 1) AS avg_hum_suelo_global,
-                ROUND(AVG(co2_ppm)::numeric,        1)                                  AS avg_co2_ppm,
-                ROUND(AVG(co_ppm)::numeric,         4)                                  AS avg_co_ppm,
-                ROUND(AVG(nh3_ppm)::numeric,        4)                                  AS avg_nh3_ppm,
-                ROUND(AVG(alcohol_ppm)::numeric,    4)                                  AS avg_alcohol_ppm,
-                ROUND(AVG(humo_ppm)::numeric,       4)                                  AS avg_humo_ppm,
-                ROUND(AVG(tolueno_ppm)::numeric,    4)                                  AS avg_tolueno_ppm,
-                ROUND(AVG(acetona_ppm)::numeric,    4)                                  AS avg_acetona_ppm,
-                MAX(recorded_at)                                                        AS newest_reading
+                COUNT(DISTINCT device_id)             AS device_count,
+                COUNT(DISTINCT (device_id, zona))      AS zone_count,
+                COUNT(*)                               AS reading_count,
+                ROUND(AVG(temperatura)::numeric,  2)   AS avg_temperatura,
+                ROUND(AVG(hum_ambiente)::numeric, 2)   AS avg_hum_ambiente,
+                ROUND(AVG(hum_suelo)::numeric,    1)   AS avg_hum_suelo,
+                ROUND(AVG(co2_ppm)::numeric,      1)   AS avg_co2_ppm,
+                ROUND(AVG(co_ppm)::numeric,       4)   AS avg_co_ppm,
+                ROUND(AVG(nh3_ppm)::numeric,      4)   AS avg_nh3_ppm,
+                ROUND(AVG(alcohol_ppm)::numeric,  4)   AS avg_alcohol_ppm,
+                ROUND(AVG(humo_ppm)::numeric,     4)   AS avg_humo_ppm,
+                ROUND(AVG(tolueno_ppm)::numeric,  4)   AS avg_tolueno_ppm,
+                ROUND(AVG(acetona_ppm)::numeric,  4)   AS avg_acetona_ppm,
+                MAX(recorded_at)                       AS newest_reading
             FROM sensor_readings
             WHERE recorded_at > NOW() - INTERVAL '1 hour'
         """)
@@ -315,10 +319,10 @@ async def sensors_history(
             SELECT
                 date_trunc('{cfg["trunc"]}', recorded_at)   AS periodo,
                 COUNT(*)                                     AS registros,
+                COUNT(DISTINCT (device_id, zona))            AS zone_count,
                 ROUND(AVG(temperatura)::numeric,   1)        AS avg_temperatura,
                 ROUND(AVG(hum_ambiente)::numeric,  1)        AS avg_hum_ambiente,
-                ROUND(AVG(hum_suelo_z1)::numeric,  1)        AS avg_hum_suelo_z1,
-                ROUND(AVG(hum_suelo_z2)::numeric,  1)        AS avg_hum_suelo_z2,
+                ROUND(AVG(hum_suelo)::numeric,     1)        AS avg_hum_suelo,
                 ROUND(AVG(co2_ppm)::numeric,       1)        AS avg_co2_ppm,
                 ROUND(AVG(co_ppm)::numeric,        4)        AS avg_co_ppm,
                 ROUND(AVG(nh3_ppm)::numeric,       4)        AS avg_nh3_ppm
