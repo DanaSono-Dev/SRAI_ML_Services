@@ -1,3 +1,4 @@
+import asyncio
 import io
 import json
 import logging
@@ -9,7 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import asyncpg
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
@@ -21,18 +22,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATABASE_URL        = os.getenv("DATABASE_URL",        "postgresql://srai:srai_pass@postgres:5432/srai_db")
-MINIO_ENDPOINT      = os.getenv("MINIO_ENDPOINT",      "minio:9000")
-MINIO_ACCESS        = os.getenv("MINIO_ACCESS_KEY",    "minioadmin")
-MINIO_SECRET        = os.getenv("MINIO_SECRET_KEY",    "minioadmin123")
-MINIO_BUCKET        = os.getenv("MINIO_BUCKET",        "srai-images")
-MAX_CAPTURES_TODAY  = int(os.getenv("MAX_CAPTURES_TODAY", "150"))
+DATABASE_URL         = os.getenv("DATABASE_URL",         "postgresql://srai:srai_pass@postgres:5432/srai_db")
+MINIO_ENDPOINT       = os.getenv("MINIO_ENDPOINT",       "minio:9000")
+MINIO_ACCESS         = os.getenv("MINIO_ACCESS_KEY",     "minioadmin")
+MINIO_SECRET         = os.getenv("MINIO_SECRET_KEY",     "minioadmin123")
+MINIO_BUCKET         = os.getenv("MINIO_BUCKET",         "srai-images")
+MAX_CAPTURES_TODAY   = int(os.getenv("MAX_CAPTURES_TODAY",   "150"))
+DB_RETENTION_MONTHS  = int(os.getenv("DB_RETENTION_MONTHS",  "6"))
+MINIO_RETENTION_DAYS = int(os.getenv("MINIO_RETENTION_DAYS", "30"))
 
 db_pool: asyncpg.Pool = None
 
-# Regex to replace JSON-invalid NaN/Infinity literals before parsing
 _NAN_RE = re.compile(r'\bNaN\b')
 
+
+# ─── Helpers ─────────────────────────────────────────────────────────────────
 
 def _safe_json_loads(s: str):
     """json.loads tolerante a NaN (convierte a null)."""
@@ -43,7 +47,7 @@ def _safe_json_loads(s: str):
 
 
 async def _init_conn(conn):
-    """Registra codec JSONB explícitamente para garantizar decodificación a dict."""
+    """Registra codec JSONB para garantizar decodificación a dict."""
     await conn.set_type_codec(
         'jsonb',
         encoder=json.dumps,
@@ -52,27 +56,8 @@ async def _init_conn(conn):
     )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global db_pool
-    db_pool = await asyncpg.create_pool(
-        DATABASE_URL, min_size=2, max_size=10, init=_init_conn
-    )
-    logger.info("Pool de BD inicializado con codec JSONB")
-    yield
-    await db_pool.close()
-
-
-app = FastAPI(title="SRAI Dashboard", version="1.0.0", lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-def _minio() -> Minio:
-    return Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS, secret_key=MINIO_SECRET, secure=False)
-
-
 def _clean_probs(v) -> dict:
-    """Normaliza el campo probabilidades a dict con valores float finitos."""
+    """Normaliza probabilidades a dict con valores float finitos."""
     if isinstance(v, str):
         try:
             v = _safe_json_loads(v)
@@ -97,6 +82,100 @@ def _to_dict(record) -> dict:
         elif k == 'probabilidades':
             d[k] = _clean_probs(v)
     return d
+
+
+def _minio() -> Minio:
+    return Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS, secret_key=MINIO_SECRET, secure=False)
+
+
+# ─── Retención de datos ───────────────────────────────────────────────────────
+
+def _configure_minio_lifecycle():
+    """
+    Registra en MinIO una política de ciclo de vida que expira objetos
+    automáticamente a los MINIO_RETENTION_DAYS días.
+    MinIO aplica el borrado en segundo plano; no requiere intervención manual.
+    """
+    try:
+        from minio.commonconfig import ENABLED
+        from minio.lifecycleconfig import Expiration, Filter, LifecycleConfig, Rule
+
+        config = LifecycleConfig([
+            Rule(
+                ENABLED,
+                rule_filter=Filter(prefix=""),
+                rule_id="srai-auto-expire",
+                expiration=Expiration(days=MINIO_RETENTION_DAYS),
+            )
+        ])
+        _minio().set_bucket_lifecycle(MINIO_BUCKET, config)
+        logger.info(
+            "Política MinIO configurada: imágenes se eliminan a los %d días",
+            MINIO_RETENTION_DAYS,
+        )
+    except Exception as exc:
+        logger.warning("No se pudo configurar lifecycle MinIO: %s", exc)
+
+
+async def _run_db_cleanup():
+    """
+    Elimina de las tres tablas los registros más antiguos que DB_RETENTION_MONTHS
+    meses. Usa make_interval para evitar hardcodeo y pasar el valor como parámetro.
+    """
+    try:
+        async with db_pool.acquire() as conn:
+            r1 = await conn.execute(
+                "DELETE FROM sensor_readings "
+                "WHERE recorded_at < NOW() - make_interval(months => $1)",
+                DB_RETENTION_MONTHS,
+            )
+            r2 = await conn.execute(
+                "DELETE FROM sensor_alerts "
+                "WHERE alerted_at  < NOW() - make_interval(months => $1)",
+                DB_RETENTION_MONTHS,
+            )
+            r3 = await conn.execute(
+                "DELETE FROM captures "
+                "WHERE received_at < NOW() - make_interval(months => $1)",
+                DB_RETENTION_MONTHS,
+            )
+        logger.info(
+            "Limpieza BD (%d meses): %s lecturas | %s alertas | %s capturas",
+            DB_RETENTION_MONTHS, r1, r2, r3,
+        )
+    except Exception as exc:
+        logger.error("Error en limpieza de BD: %s", exc)
+
+
+async def _cleanup_loop():
+    """Tarea de fondo: limpieza diaria de datos históricos."""
+    while True:
+        await asyncio.sleep(24 * 3600)   # primera ejecución 24 h después del arranque
+        logger.info("Iniciando limpieza periódica de datos históricos…")
+        await _run_db_cleanup()
+
+
+# ─── Lifecycle ────────────────────────────────────────────────────────────────
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global db_pool
+    db_pool = await asyncpg.create_pool(
+        DATABASE_URL, min_size=2, max_size=10, init=_init_conn
+    )
+    logger.info("Pool de BD inicializado con codec JSONB")
+
+    _configure_minio_lifecycle()
+    cleanup_task = asyncio.create_task(_cleanup_loop())
+
+    yield
+
+    cleanup_task.cancel()
+    await db_pool.close()
+
+
+app = FastAPI(title="SRAI Dashboard", version="1.0.0", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ─── Static ──────────────────────────────────────────────────────────────────
@@ -147,13 +226,14 @@ async def latest_inference():
 
 @app.get("/api/today-captures")
 async def today_captures():
-    """Capturas del día actual, límite configurable por MAX_CAPTURES_TODAY."""
+    """Capturas del día actual — límite configurable por MAX_CAPTURES_TODAY."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT capture_id, device_id, received_at, processed_at,
                    minio_path, clase, confianza, probabilidades
             FROM captures
             WHERE DATE(received_at) = CURRENT_DATE
+              AND minio_path IS NOT NULL
             ORDER BY received_at DESC
             LIMIT $1
         """, MAX_CAPTURES_TODAY)
@@ -187,10 +267,7 @@ async def sensors_all_latest():
 
 @app.get("/api/sensors/averages")
 async def sensors_averages():
-    """
-    Promedio de sensores homólogos entre todos los ESP32 registrados en la
-    última hora.  Fórmula: SUM(sensor_X de todos los dispositivos) / N lecturas
-    """
+    """Promedio de sensores homólogos entre todos los ESP32 (última hora)."""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("""
             SELECT
@@ -217,6 +294,63 @@ async def sensors_averages():
     return {"data": _to_dict(row)}
 
 
+# ─── Históricos ──────────────────────────────────────────────────────────────
+
+# Valores derivados de whitelist, nunca de entrada del usuario — safe para f-string
+_PERIOD_CFG = {
+    "day":   {"trunc": "hour", "interval": "1 day"},
+    "week":  {"trunc": "day",  "interval": "7 days"},
+    "month": {"trunc": "day",  "interval": "30 days"},
+}
+
+
+@app.get("/api/sensors/history")
+async def sensors_history(
+    period: str = Query("day", pattern="^(day|week|month)$"),
+):
+    """Promedio de sensores agrupado por hora (day) o por día (week/month)."""
+    cfg = _PERIOD_CFG[period]
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(f"""
+            SELECT
+                date_trunc('{cfg["trunc"]}', recorded_at)   AS periodo,
+                COUNT(*)                                     AS registros,
+                ROUND(AVG(temperatura)::numeric,   1)        AS avg_temperatura,
+                ROUND(AVG(hum_ambiente)::numeric,  1)        AS avg_hum_ambiente,
+                ROUND(AVG(hum_suelo_z1)::numeric,  1)        AS avg_hum_suelo_z1,
+                ROUND(AVG(hum_suelo_z2)::numeric,  1)        AS avg_hum_suelo_z2,
+                ROUND(AVG(co2_ppm)::numeric,       1)        AS avg_co2_ppm,
+                ROUND(AVG(co_ppm)::numeric,        4)        AS avg_co_ppm,
+                ROUND(AVG(nh3_ppm)::numeric,       4)        AS avg_nh3_ppm
+            FROM sensor_readings
+            WHERE recorded_at > NOW() - INTERVAL '{cfg["interval"]}'
+            GROUP BY 1
+            ORDER BY 1 DESC
+        """)
+    return {"data": [_to_dict(r) for r in rows], "period": period}
+
+
+@app.get("/api/inference/history")
+async def inference_history(
+    period: str = Query("day", pattern="^(day|week|month)$"),
+):
+    """Conteo e inferencia promedio agrupado por hora (day) o por día (week/month)."""
+    cfg = _PERIOD_CFG[period]
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(f"""
+            SELECT
+                date_trunc('{cfg["trunc"]}', received_at)   AS periodo,
+                clase,
+                COUNT(*)                                     AS total,
+                ROUND(AVG(confianza)::numeric, 3)            AS avg_confianza
+            FROM captures
+            WHERE received_at > NOW() - INTERVAL '{cfg["interval"]}'
+            GROUP BY 1, 2
+            ORDER BY 1 DESC, total DESC
+        """)
+    return {"data": [_to_dict(r) for r in rows], "period": period}
+
+
 # ─── Health ───────────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -224,5 +358,7 @@ async def health():
     return {
         "status": "ok",
         "service": "srai_dashboard",
+        "db_retention_months": DB_RETENTION_MONTHS,
+        "minio_retention_days": MINIO_RETENTION_DAYS,
         "timestamp": datetime.utcnow().isoformat(),
     }

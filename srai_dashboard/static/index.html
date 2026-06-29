@@ -505,6 +505,140 @@ header {
 ::-webkit-scrollbar        { width: 3px; height: 3px; }
 ::-webkit-scrollbar-track  { background: transparent; }
 ::-webkit-scrollbar-thumb  { background: var(--border); border-radius: 2px; }
+
+/* ═══════════════════════════════════════════
+   SECCIÓN 4 — Vista Histórica
+═══════════════════════════════════════════ */
+.s4-views {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.s4-avg-view,
+.s4-hist-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.period-tabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-bottom: 8px;
+}
+
+.period-tab {
+  flex: 1;
+  padding: 5px 4px;
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  color: var(--muted);
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  transition: all .15s;
+}
+
+.period-tab.active {
+  background: var(--blue-bg);
+  color: var(--blue);
+  border-color: var(--blue);
+}
+
+.hist-scroll {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+.hist-section-title {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+  margin: 8px 0 4px;
+}
+
+.hist-section-title:first-child { margin-top: 0; }
+
+.hist-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.hist-table th {
+  text-align: right;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 3px 5px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.hist-table th:first-child { text-align: left; }
+
+.hist-table td {
+  text-align: right;
+  padding: 2px 5px;
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid rgba(51,65,85,0.35);
+}
+
+.hist-table td:first-child { text-align: left; color: var(--muted); }
+.hist-table tr:last-child td { border-bottom: none; }
+
+.inf-period-block { margin-bottom: 8px; }
+
+.inf-period-lbl {
+  font-size: 9px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.inf-cls-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 2px;
+}
+
+.inf-cls-name {
+  font-size: 9px;
+  color: var(--muted);
+  width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.inf-bar-bg {
+  flex: 1;
+  height: 4px;
+  background: var(--surface2);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.inf-bar-fill { height: 100%; border-radius: 2px; }
+
+.inf-cls-count {
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  width: 22px;
+  text-align: right;
+  flex-shrink: 0;
+}
 </style>
 </head>
 <body>
@@ -562,11 +696,14 @@ header {
     </div>
   </div>
 
-  <!-- ┘ SECCIÓN 4: Promedios Globales ──────────────────────────────── -->
+  <!-- ┘ SECCIÓN 4: Promedios Globales / Histórico ──────────────────── -->
   <div class="card">
     <div class="card-hdr">
-      <div class="card-title">📊 Promedios Globales</div>
-      <span class="tag" id="s4-tag">última hora</span>
+      <div class="card-title" id="s4-title">📊 Promedios Globales</div>
+      <div style="display:flex;align-items:center;gap:5px">
+        <span class="tag" id="s4-tag">última hora</span>
+        <button class="btn-sm" id="s4-toggle" title="Ver histórico">≡ Hist.</button>
+      </div>
     </div>
     <div class="card-body" id="s4-body">
       <div class="no-data"><div class="spinner"></div></div>
@@ -743,6 +880,7 @@ function renderS1(payload) {
 let s2Items   = [];
 let s2Idx     = 0;
 let s2Timer   = null;
+const s2Failed = new Set(); // capture_ids cuya imagen falló en MinIO
 
 function renderS2(payload) {
   const body    = document.getElementById('s2-body');
@@ -788,14 +926,17 @@ function renderS2(payload) {
     document.getElementById('s2-next').addEventListener('click', () =>
       s2GoTo((s2Idx + 1) % s2Items.length));
     document.getElementById('s2-img').addEventListener('error', () => {
-      // Imagen eliminada de MinIO o no disponible → saltar a la siguiente
-      s2Items.splice(s2Idx, 1);
+      // Marcar como fallida y filtrar sin cascade visual (debounce 200 ms)
+      const failedId = s2Items[s2Idx]?.capture_id;
+      if (failedId) s2Failed.add(failedId);
+      s2Items = s2Items.filter(d => !s2Failed.has(d.capture_id));
       if (s2Items.length === 0) {
+        if (s2Timer) { clearInterval(s2Timer); s2Timer = null; }
         body.innerHTML = `<div class="no-data">Sin imágenes disponibles</div>`;
         return;
       }
-      s2Idx = s2Idx % s2Items.length;
-      s2GoTo(s2Idx);
+      s2Idx = Math.min(s2Idx, s2Items.length - 1);
+      setTimeout(() => s2GoTo(s2Idx), 200);
     });
   } else {
     // Actualizar los dots si cambió la cantidad
@@ -981,20 +1122,34 @@ document.getElementById('s3-next').addEventListener('click', () => {
 /* ═══════════════════════════════════════════════════════════════
    SECCIÓN 4 — Promedios Globales
 ═══════════════════════════════════════════════════════════════ */
-function renderS4(payload) {
-  const body = document.getElementById('s4-body');
-  const tag  = document.getElementById('s4-tag');
+/* ─── S4 estado ─────────────────────────────────────────────── */
+let s4View    = 'avg';   // 'avg' | 'hist'
+let s4Period  = 'day';   // 'day' | 'week' | 'month'
+let s4AvgData = null;    // último payload de promedios
+let s4Inited  = false;   // estructura del card ya creada
+
+const CLS_COLORS = {
+  sanas: '#22c55e', tizon_temprano: '#f59e0b',
+  moho_foliar: '#f97316', TYLCV: '#ef4444',
+};
+
+/* ─── Renderiza la vista de promedios ────────────────────────── */
+function renderS4Avg(payload) {
+  s4AvgData = payload;
+  const tag = document.getElementById('s4-tag');
+  const el  = document.getElementById('s4-avg-inner');
+  if (!el) return;
 
   const d = payload?.data;
   if (!d) {
-    tag.textContent = 'sin datos';
-    body.innerHTML = `<div class="no-data">Sin lecturas en la última hora</div>`;
+    if (tag) tag.textContent = 'sin datos';
+    el.innerHTML = `<div class="no-data">Sin lecturas en la última hora</div>`;
     return;
   }
 
-  tag.textContent = `${d.device_count} disp. · última hora`;
+  if (tag) tag.textContent = `${d.device_count} disp. · última hora`;
 
-  body.innerHTML = `
+  el.innerHTML = `
     <div class="avg-grid">
       <div class="avg-card">
         <div class="avg-lbl">🌡️ Temperatura</div>
@@ -1027,41 +1182,177 @@ function renderS4(payload) {
         <div class="avg-unit">% (Z1+Z2)/2 · ${d.device_count} disp.</div>
       </div>
     </div>
-
     <div class="divider"></div>
-
     <div class="sg">
-      <div class="sg-title">⚗️ Gases Traza — ppm promedio (${d.device_count} dispositivos)</div>
-      <div class="gas-row">
-        <span class="gas-name">CO (Monóxido)</span>
-        <span class="gas-val">${n(d.avg_co_ppm, 4)}</span>
-      </div>
-      <div class="gas-row">
-        <span class="gas-name">NH₃ (Amoniaco)</span>
-        <span class="gas-val">${n(d.avg_nh3_ppm, 4)}</span>
-      </div>
-      <div class="gas-row">
-        <span class="gas-name">Alcohol</span>
-        <span class="gas-val">${n(d.avg_alcohol_ppm, 4)}</span>
-      </div>
-      <div class="gas-row">
-        <span class="gas-name">Humo</span>
-        <span class="gas-val">${n(d.avg_humo_ppm, 4)}</span>
-      </div>
-      <div class="gas-row">
-        <span class="gas-name">Tolueno</span>
-        <span class="gas-val">${n(d.avg_tolueno_ppm, 4)}</span>
-      </div>
-      <div class="gas-row">
-        <span class="gas-name">Acetona</span>
-        <span class="gas-val">${n(d.avg_acetona_ppm, 4)}</span>
-      </div>
+      <div class="sg-title">⚗️ Gases Traza — ppm (${d.device_count} disp.)</div>
+      <div class="gas-row"><span class="gas-name">CO (Monóxido)</span><span class="gas-val">${n(d.avg_co_ppm, 4)}</span></div>
+      <div class="gas-row"><span class="gas-name">NH₃ (Amoniaco)</span><span class="gas-val">${n(d.avg_nh3_ppm, 4)}</span></div>
+      <div class="gas-row"><span class="gas-name">Alcohol</span><span class="gas-val">${n(d.avg_alcohol_ppm, 4)}</span></div>
+      <div class="gas-row"><span class="gas-name">Humo</span><span class="gas-val">${n(d.avg_humo_ppm, 4)}</span></div>
+      <div class="gas-row"><span class="gas-name">Tolueno</span><span class="gas-val">${n(d.avg_tolueno_ppm, 4)}</span></div>
+      <div class="gas-row"><span class="gas-name">Acetona</span><span class="gas-val">${n(d.avg_acetona_ppm, 4)}</span></div>
     </div>
-
     <div style="text-align:right;font-size:9px;color:var(--muted);margin-top:6px">
       Última lectura: ${fmtDatetime(d.newest_reading)} · ${d.reading_count} registros
     </div>
   `;
+}
+
+/* ─── Renderiza la vista histórica ───────────────────────────── */
+function renderS4Hist(sensors, inference) {
+  const el = document.getElementById('s4-hist-inner');
+  if (!el) return;
+
+  const sRows = sensors?.data || [];
+  const iRows = inference?.data || [];
+
+  const fmtP = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    return s4Period === 'day'
+      ? `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
+      : `${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`;
+  };
+
+  // Tabla de sensores
+  const sHtml = sRows.length === 0
+    ? `<div class="no-data" style="height:50px;font-size:11px">Sin datos</div>`
+    : `<div style="overflow-x:auto">
+        <table class="hist-table">
+          <thead><tr>
+            <th>Período</th><th>Temp °C</th><th>H.Amb %</th>
+            <th>Suelo Z1</th><th>Suelo Z2</th><th>CO₂ ppm</th>
+          </tr></thead>
+          <tbody>
+            ${sRows.slice(0, 20).map(r => `<tr>
+              <td>${fmtP(r.periodo)}</td>
+              <td style="color:var(--blue)">${n(r.avg_temperatura,1)}</td>
+              <td style="color:var(--blue)">${n(r.avg_hum_ambiente,1)}</td>
+              <td style="color:var(--green)">${n(r.avg_hum_suelo_z1,1)}</td>
+              <td style="color:var(--green)">${n(r.avg_hum_suelo_z2,1)}</td>
+              <td style="color:var(--violet)">${n(r.avg_co2_ppm,1)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+  // Inferencias agrupadas por período
+  const periodMap = new Map();
+  iRows.forEach(r => {
+    const key = r.periodo || '—';
+    if (!periodMap.has(key)) periodMap.set(key, { total: 0, classes: {} });
+    const p = periodMap.get(key);
+    p.total += Number(r.total);
+    p.classes[r.clase || '?'] = (p.classes[r.clase || '?'] || 0) + Number(r.total);
+  });
+
+  const iHtml = periodMap.size === 0
+    ? `<div class="no-data" style="height:40px;font-size:11px">Sin capturas</div>`
+    : Array.from(periodMap.entries()).slice(0, 10).map(([period, data]) => {
+        const bars = Object.entries(data.classes).map(([cls, count]) => {
+          const pct = Math.round(count / data.total * 100);
+          const color = CLS_COLORS[cls] || '#6b7280';
+          return `<div class="inf-cls-row">
+            <span class="inf-cls-name">${cls}</span>
+            <div class="inf-bar-bg"><div class="inf-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+            <span class="inf-cls-count" style="color:${color}">${count}</span>
+          </div>`;
+        }).join('');
+        return `<div class="inf-period-block">
+          <div class="inf-period-lbl">${fmtP(period)} · ${data.total} cap.</div>
+          ${bars}
+        </div>`;
+      }).join('');
+
+  el.innerHTML = `
+    <div class="hist-section-title">📡 Sensores</div>
+    ${sHtml}
+    <div class="hist-section-title">🤖 Inferencias</div>
+    ${iHtml}
+  `;
+}
+
+/* ─── Carga y renderiza el histórico ─────────────────────────── */
+async function loadS4Hist() {
+  const el = document.getElementById('s4-hist-inner');
+  if (el) el.innerHTML = `<div class="no-data"><div class="spinner"></div></div>`;
+  const [sensors, inference] = await Promise.all([
+    fetchJSON(`/api/sensors/history?period=${s4Period}`),
+    fetchJSON(`/api/inference/history?period=${s4Period}`),
+  ]);
+  renderS4Hist(sensors, inference);
+}
+
+/* ─── Alterna entre vistas avg ↔ hist ───────────────────────── */
+function applyS4View() {
+  const avgView  = document.getElementById('s4-avg-view');
+  const histView = document.getElementById('s4-hist-view');
+  const title    = document.getElementById('s4-title');
+  const toggle   = document.getElementById('s4-toggle');
+  const tag      = document.getElementById('s4-tag');
+
+  if (s4View === 'avg') {
+    avgView.style.display  = '';
+    histView.style.display = 'none';
+    title.textContent  = '📊 Promedios Globales';
+    toggle.textContent = '≡ Hist.';
+    tag.style.display  = '';
+    renderS4Avg(s4AvgData);
+  } else {
+    avgView.style.display  = 'none';
+    histView.style.display = '';
+    title.textContent  = '📈 Histórico';
+    toggle.textContent = '← Volver';
+    tag.style.display  = 'none';
+  }
+}
+
+/* ─── Inicializa estructura de S4 (una sola vez) ─────────────── */
+function initS4() {
+  const body = document.getElementById('s4-body');
+  body.innerHTML = `
+    <div class="s4-views">
+      <div class="s4-avg-view" id="s4-avg-view">
+        <div id="s4-avg-inner"><div class="no-data"><div class="spinner"></div></div></div>
+      </div>
+      <div class="s4-hist-view" id="s4-hist-view" style="display:none">
+        <div class="period-tabs" id="s4-tabs">
+          <button class="period-tab active" data-period="day">Día</button>
+          <button class="period-tab" data-period="week">Semana</button>
+          <button class="period-tab" data-period="month">Mes</button>
+        </div>
+        <div class="hist-scroll" id="s4-hist-inner">
+          <div class="no-data"><div class="spinner"></div></div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Tabs de período
+  document.querySelectorAll('#s4-tabs .period-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#s4-tabs .period-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      s4Period = btn.dataset.period;
+      loadS4Hist();
+    });
+  });
+
+  // Botón toggle
+  document.getElementById('s4-toggle').addEventListener('click', async () => {
+    s4View = s4View === 'avg' ? 'hist' : 'avg';
+    applyS4View();
+    if (s4View === 'hist') await loadS4Hist();
+  });
+
+  s4Inited = true;
+}
+
+// Wrapper público (compatibilidad con refresh)
+function renderS4(payload) {
+  if (!s4Inited) initS4();
+  s4AvgData = payload;
+  if (s4View === 'avg') renderS4Avg(payload);
 }
 
 /* ═══════════════════════════════════════════════════════════════
