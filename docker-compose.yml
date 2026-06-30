@@ -130,6 +130,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  srai_ws:
+    build:
+      context: ./srai_ws
+      dockerfile: Dockerfile
+    container_name: srai-ws
+    ports:
+      - "8004:8004"
+    env_file:
+      - ./srai_ws/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+      srai_dashboard:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   minio_data:

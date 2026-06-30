@@ -26,6 +26,7 @@ MINIO_BUCKET   = os.getenv("MINIO_BUCKET",     "srai-images")
 INFERENCE_URL  = os.getenv("INFERENCE_URL",    "http://inference_api:8000/v1/predict")
 DATABASE_URL   = os.getenv("DATABASE_URL",     "postgresql://srai:srai_pass@postgres:5432/srai_db")
 WEBHOOK_URL    = os.getenv("WEBHOOK_URL",      "")
+CAMERA_ZONA    = os.getenv("CAMERA_ZONA",      "") or None
 
 minio_client = Minio(
     MINIO_ENDPOINT,
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS captures (
     id             SERIAL PRIMARY KEY,
     capture_id     UUID         UNIQUE NOT NULL,
     device_id      VARCHAR(64),
+    zona           VARCHAR(32),
     esp_timestamp  VARCHAR(32),
     received_at    TIMESTAMPTZ,
     processed_at   TIMESTAMPTZ  DEFAULT NOW(),
@@ -164,12 +166,13 @@ async def process_image(
             await conn.execute(
                 """
                 INSERT INTO captures
-                    (capture_id, device_id, esp_timestamp, received_at,
+                    (capture_id, device_id, zona, esp_timestamp, received_at,
                      minio_path, image_size, clase, confianza, probabilidades)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
                 """,
                 capture_id,
                 device_id,
+                CAMERA_ZONA,
                 esp_timestamp,
                 parsed_received_at,
                 minio_path,
@@ -188,6 +191,7 @@ async def process_image(
         webhook_payload = {
             "capture_id":   str(capture_id),
             "device_id":    device_id,
+            "zona":         CAMERA_ZONA,
             "received_at":  received_at,
             "processed_at": now.isoformat(),
             "minio_path":   minio_path,
