@@ -196,11 +196,15 @@ async def _process_mqtt_queue():
 # ─── DB Migrations ────────────────────────────────────────────────────────────
 async def _run_migrations():
     async with db_pool.acquire() as conn:
-        # Agrega zona a captures (para asociar cámara con zona del invernadero)
+        # Agrega zona a captures (para asociar cámara con zona del invernadero).
+        # Ignoramos duplicate_column (ya existe) y undefined_table (srai_pipeline
+        # aún no arrancó y creará la tabla con zona incluida).
         await conn.execute("""
             DO $$ BEGIN
                 ALTER TABLE captures ADD COLUMN zona VARCHAR(32);
-            EXCEPTION WHEN duplicate_column THEN NULL;
+            EXCEPTION
+                WHEN duplicate_column THEN NULL;
+                WHEN undefined_table  THEN NULL;
             END $$;
         """)
     logger.info("Migraciones de srai_ws completadas")
