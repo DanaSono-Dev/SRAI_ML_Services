@@ -56,6 +56,7 @@ CLASES_ENFERMEDAD = set(os.getenv("CLASES_ENFERMEDAD", "tizon_temprano,moho_foli
 # ─── Estado global ────────────────────────────────────────────────────────────
 db_pool: asyncpg.Pool = None
 _mqtt_queue: asyncio.Queue = None
+_mqtt_client: Optional[mqtt.Client] = None   # cliente MQTT compartido (pub + sub)
 
 # ─── Información clínica de enfermedades ──────────────────────────────────────
 ENFERMEDAD_INFO = {
@@ -134,15 +135,19 @@ def _mqtt_on_message(client, userdata, msg):
 
 
 def _run_mqtt(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue):
+    global _mqtt_client
     client = mqtt.Client(client_id="srai_ws_bridge", userdata={"loop": loop, "queue": queue})
     client.on_message = _mqtt_on_message
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         client.subscribe("invernadero/jitomate/+/estado")
+        _mqtt_client = client        # disponible para publish desde endpoints
         logger.info("MQTT conectado a %s:%d", MQTT_BROKER, MQTT_PORT)
-        client.loop_forever()
+        client.loop_forever()        # bloquea hasta que se detenga
     except Exception as exc:
         logger.error("Error MQTT: %s", exc)
+    finally:
+        _mqtt_client = None
 
 
 async def _process_mqtt_queue():
@@ -622,6 +627,35 @@ async def get_zone_history(
             for r in rows
         ],
     }
+
+
+# ─── REST: Actuadores ─────────────────────────────────────────────────────────
+
+class ValvulaCmd(BaseModel):
+    device_id: str          # ej. "ESP32_1"
+    zona:      int          # 1, 2, 3 ...
+    valvula:   bool         # True = ABIERTA, False = CERRADA
+
+
+@app.post("/api/actuators/valvula")
+async def set_valvula(cmd: ValvulaCmd):
+    """
+    Publica un comando MQTT al ESP32 para abrir o cerrar una válvula.
+    El ESP32 está suscrito a invernadero/jitomate/{device_id}/cmd y
+    aplica el cambio físico de inmediato.
+    """
+    if _mqtt_client is None or not _mqtt_client.is_connected():
+        raise HTTPException(status_code=503, detail="MQTT no disponible")
+
+    topic   = f"invernadero/jitomate/{cmd.device_id}/cmd"
+    payload = json.dumps({"zona": cmd.zona, "valvula": cmd.valvula})
+
+    result = _mqtt_client.publish(topic, payload, qos=0)
+    if result.rc != mqtt.MQTT_ERR_SUCCESS:
+        raise HTTPException(status_code=500, detail="Error publicando comando MQTT")
+
+    logger.info("Comando válvula publicado: %s → %s", topic, payload)
+    return {"ok": True, "topic": topic, "payload": payload}
 
 
 # ─── Health ───────────────────────────────────────────────────────────────────
