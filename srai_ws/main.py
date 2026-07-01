@@ -824,6 +824,32 @@ async def get_sensor_series(
     }
 
 
+@app.get("/api/diseases/count")
+async def get_disease_count(
+    period: str = Query("week", pattern="^(day|week|month)$"),
+    fecha: Optional[str] = None,
+):
+    """
+    Total de detecciones de ENFERMEDAD (tabla captures, clase en CLASES_ENFERMEDAD)
+    en el período (CDMX). Cuenta el evento histórico, sin importar si la imagen
+    sigue en MinIO.
+    """
+    start, end, _ = _periodo_bounds(period, fecha)
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) AS total FROM captures "
+                "WHERE processed_at >= $1 AND processed_at < $2 "
+                "AND clase = ANY($3::text[])",
+                start, end, list(CLASES_ENFERMEDAD),
+            )
+        total = row["total"] if row else 0
+    except Exception as exc:
+        logger.warning("No se pudo contar enfermedades: %s", exc)
+        total = 0
+    return {"period": period, "total": total}
+
+
 # ─── REST: Actuadores ─────────────────────────────────────────────────────────
 
 class ValvulaCmd(BaseModel):
