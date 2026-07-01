@@ -774,6 +774,15 @@ function statusCss(estado) {
   return 's-info';
 }
 
+// Devuelve el badge de estado; si el sensor no envió dato (null/NaN o estado
+// "sin_dato") muestra "SIN DATOS" en rojo.
+function sensorStatus(val, estado) {
+  const sinDato = val === null || val === undefined ||
+                  (typeof val === 'number' && isNaN(val)) || estado === 'sin_dato';
+  if (sinDato) return '<span class="status s-crit">SIN DATOS</span>';
+  return `<span class="status ${statusCss(estado)}">${estado || '—'}</span>`;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    RELOJ
 ═══════════════════════════════════════════════════════════════ */
@@ -1071,17 +1080,17 @@ function s3ShowDevice() {
           <div class="sr">
             <span class="sr-name">Temperatura</span>
             <span class="sr-val">${n(d.temperatura, 1)} °C</span>
-            <span class="status ${statusCss(d.temp_estado)}">${d.temp_estado || '—'}</span>
+            ${sensorStatus(d.temperatura, d.temp_estado)}
           </div>
           <div class="sr">
             <span class="sr-name">Humedad Ambiente</span>
             <span class="sr-val">${n(d.hum_ambiente, 1)} %</span>
-            <span class="status ${statusCss(d.hum_amb_estado)}">${d.hum_amb_estado || '—'}</span>
+            ${sensorStatus(d.hum_ambiente, d.hum_amb_estado)}
           </div>
           <div class="sr">
             <span class="sr-name">Suelo</span>
             <span class="sr-val">${d.hum_suelo ?? '—'} %</span>
-            <span class="status ${statusCss(d.suelo_estado)}">${d.suelo_estado || '—'}</span>
+            ${sensorStatus(d.hum_suelo, d.suelo_estado)}
           </div>
           <div class="sr" style="padding-left:12px">
             <span class="sr-name" style="font-size:10px;color:var(--muted)">Válvula</span>
@@ -1094,7 +1103,7 @@ function s3ShowDevice() {
           <div class="sr">
             <span class="sr-name">CO₂</span>
             <span class="sr-val">${n(d.co2_ppm, 1)} ppm</span>
-            <span class="status ${statusCss(d.co2_estado)}">${d.co2_estado || '—'}</span>
+            ${sensorStatus(d.co2_ppm, d.co2_estado)}
           </div>
           <div class="sr"><span class="sr-name">CO (Monóxido)</span><span class="sr-val">${n(d.co_ppm, 4)} ppm</span></div>
           <div class="sr"><span class="sr-name">NH₃ (Amoniaco)</span><span class="sr-val">${n(d.nh3_ppm, 4)} ppm</span></div>
