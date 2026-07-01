@@ -684,32 +684,17 @@ async def get_zone_history(
     }
 
 
-# ─── REST: Serie histórica por zona + sensor ──────────────────────────────────
+# ─── REST: Serie histórica (por zona o promedio de todas las zonas) ───────────
 
 # Whitelist de columnas: se interpolan en el SQL, nunca vienen del usuario libre
 _SERIE_FIELDS = {"temperatura", "hum_ambiente", "hum_suelo", "co2_ppm", "co_ppm", "nh3_ppm"}
 
 
-@app.get("/api/sensors/zone/{zona}/series")
-async def get_zone_series(
-    zona: str,
-    field: str = Query("temperatura"),
-    period: str = Query("day", pattern="^(day|week|month)$"),
-    fecha: Optional[str] = None,
-):
-    """
-    Serie histórica de UN sensor de UNA zona, con promedio, mínimo y máximo por
-    bucket, más un resumen del período completo. Alineado a zona horaria CDMX.
-    Buckets:
-      day   → por hora (día en curso)
-      week  → por día  (semana calendario lun-dom)
-      month → por día  (mes calendario)
-    """
-    if field not in _SERIE_FIELDS:
-        raise HTTPException(400, f"Campo inválido: {field}")
-
+def _periodo_bounds(period: str, fecha: Optional[str]):
+    """Ventana [start, end) y granularidad del bucket, alineadas a CDMX.
+       day → por hora (día en curso); week → por día (semana lun-dom);
+       month → por día (mes en curso)."""
     target = date.fromisoformat(fecha) if fecha else datetime.now(CDMX_TZ).date()
-
     if period == "day":
         start = datetime.combine(target, datetime.min.time(), tzinfo=CDMX_TZ)
         end   = start + timedelta(days=1)
@@ -725,24 +710,11 @@ async def get_zone_series(
         start = datetime.combine(first, datetime.min.time(), tzinfo=CDMX_TZ)
         end   = datetime.combine(nxt,   datetime.min.time(), tzinfo=CDMX_TZ)
         trunc = "day"
+    return start, end, trunc
 
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            f"""
-            SELECT
-                date_trunc('{trunc}', recorded_at AT TIME ZONE 'America/Mexico_City') AS bucket,
-                ROUND(AVG({field})::numeric, 2) AS prom,
-                ROUND(MIN({field})::numeric, 2) AS minimo,
-                ROUND(MAX({field})::numeric, 2) AS maximo,
-                COUNT(*)                        AS lecturas
-            FROM sensor_readings
-            WHERE zona = $1 AND recorded_at >= $2 AND recorded_at < $3
-            GROUP BY bucket
-            ORDER BY bucket ASC
-            """,
-            zona, start, end,
-        )
 
+def _build_serie(rows, period: str) -> dict:
+    """Convierte los buckets del SQL en {data:[...], resumen:{...}}."""
     def label_of(bucket) -> str:
         if bucket is None:
             return ""
@@ -762,7 +734,6 @@ async def get_zone_series(
         for r in rows
     ]
 
-    # Resumen del período completo, calculado a partir de los buckets
     proms = [(d["prom"], d["lecturas"]) for d in data if d["prom"] is not None]
     mins  = [d["min"] for d in data if d["min"] is not None]
     maxs  = [d["max"] for d in data if d["max"] is not None]
@@ -773,15 +744,83 @@ async def get_zone_series(
         "max":      round(max(maxs), 2) if maxs else None,
         "lecturas": sum(d["lecturas"] for d in data),
     }
+    return {"resumen": resumen, "data": data}
+
+
+@app.get("/api/sensors/zone/{zona}/series")
+async def get_zone_series(
+    zona: str,
+    field: str = Query("temperatura"),
+    period: str = Query("day", pattern="^(day|week|month)$"),
+    fecha: Optional[str] = None,
+):
+    """Serie histórica de UN sensor de UNA zona (prom/min/max por bucket + resumen)."""
+    if field not in _SERIE_FIELDS:
+        raise HTTPException(400, f"Campo inválido: {field}")
+
+    start, end, trunc = _periodo_bounds(period, fecha)
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                date_trunc('{trunc}', recorded_at AT TIME ZONE 'America/Mexico_City') AS bucket,
+                ROUND(AVG({field})::numeric, 2) AS prom,
+                ROUND(MIN({field})::numeric, 2) AS minimo,
+                ROUND(MAX({field})::numeric, 2) AS maximo,
+                COUNT(*)                        AS lecturas
+            FROM sensor_readings
+            WHERE zona = $1 AND recorded_at >= $2 AND recorded_at < $3
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            zona, start, end,
+        )
 
     return {
-        "zona":    zona,
-        "field":   field,
-        "period":  period,
-        "start":   start.isoformat(),
-        "end":     end.isoformat(),
-        "resumen": resumen,
-        "data":    data,
+        "zona":   zona, "field": field, "period": period,
+        "start":  start.isoformat(), "end": end.isoformat(),
+        **_build_serie(rows, period),
+    }
+
+
+@app.get("/api/sensors/series")
+async def get_sensor_series(
+    field: str = Query("temperatura"),
+    period: str = Query("day", pattern="^(day|week|month)$"),
+    fecha: Optional[str] = None,
+):
+    """
+    Serie histórica de UN sensor promediado entre TODAS las zonas (prom/min/max por
+    bucket + resumen). El valor de cada bucket es exactamente el promedio de todas
+    las zonas en ese lapso. Mismos buckets y alineación CDMX que la serie por zona.
+    """
+    if field not in _SERIE_FIELDS:
+        raise HTTPException(400, f"Campo inválido: {field}")
+
+    start, end, trunc = _periodo_bounds(period, fecha)
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                date_trunc('{trunc}', recorded_at AT TIME ZONE 'America/Mexico_City') AS bucket,
+                ROUND(AVG({field})::numeric, 2) AS prom,
+                ROUND(MIN({field})::numeric, 2) AS minimo,
+                ROUND(MAX({field})::numeric, 2) AS maximo,
+                COUNT(*)                        AS lecturas
+            FROM sensor_readings
+            WHERE recorded_at >= $1 AND recorded_at < $2
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            start, end,
+        )
+
+    return {
+        "field":  field, "period": period,
+        "start":  start.isoformat(), "end": end.isoformat(),
+        **_build_serie(rows, period),
     }
 
 
