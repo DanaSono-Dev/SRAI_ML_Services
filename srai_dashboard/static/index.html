@@ -717,7 +717,7 @@ header {
     <div class="card-hdr">
       <div class="card-title" id="s4-title">📊 Promedios Globales</div>
       <div style="display:flex;align-items:center;gap:5px">
-        <span class="tag" id="s4-tag">última hora</span>
+        <span class="tag" id="s4-tag">última lectura</span>
         <button class="btn-sm" id="s4-toggle" title="Ver histórico">≡ Hist.</button>
       </div>
     </div>
@@ -946,12 +946,22 @@ function renderS2(payload) {
       const failedId = s2Items[s2Idx]?.capture_id;
       if (failedId) s2Failed.add(failedId);
       s2Items = s2Items.filter(d => !s2Failed.has(d.capture_id));
+      // Mantener el contador en sincronía con las imágenes realmente disponibles
+      counter.textContent = `${s2Items.length} imagen${s2Items.length !== 1 ? 'es' : ''}`;
       if (s2Items.length === 0) {
         if (s2Timer) { clearInterval(s2Timer); s2Timer = null; }
         body.innerHTML = `<div class="no-data">Sin imágenes disponibles</div>`;
         return;
       }
       s2Idx = Math.min(s2Idx, s2Items.length - 1);
+      // Rehacer los dots según la cantidad restante
+      const dotsEl = document.getElementById('s2-dots');
+      if (dotsEl) {
+        const maxD = Math.min(s2Items.length, 10);
+        dotsEl.innerHTML = Array.from({ length: maxD }, (_, i) => `<div class="dot" data-i="${i}"></div>`).join('');
+        dotsEl.querySelectorAll('.dot').forEach(el =>
+          el.addEventListener('click', () => s2GoTo(parseInt(el.dataset.i))));
+      }
       setTimeout(() => s2GoTo(s2Idx), 200);
     });
   } else {
@@ -1144,11 +1154,11 @@ function renderS4Avg(payload) {
   const d = payload?.data;
   if (!d) {
     if (tag) tag.textContent = 'sin datos';
-    el.innerHTML = `<div class="no-data">Sin lecturas en la última hora</div>`;
+    el.innerHTML = `<div class="no-data">Sin lecturas registradas</div>`;
     return;
   }
 
-  if (tag) tag.textContent = `${d.device_count} disp. · ${d.zone_count} zonas · última hora`;
+  if (tag) tag.textContent = `${d.device_count} disp. · ${d.zone_count} zonas · última lectura`;
 
   el.innerHTML = `
     <div class="avg-grid">

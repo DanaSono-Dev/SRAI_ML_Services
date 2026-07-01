@@ -88,6 +88,19 @@ def _minio() -> Minio:
     return Minio(MINIO_ENDPOINT, access_key=MINIO_ACCESS, secret_key=MINIO_SECRET, secure=False)
 
 
+def _existing_paths():
+    """
+    Conjunto de object_names presentes actualmente en MinIO. Devuelve None si
+    MinIO no responde (en ese caso no se filtra, para no ocultar todo ante una
+    caída temporal del almacenamiento).
+    """
+    try:
+        return {obj.object_name for obj in _minio().list_objects(MINIO_BUCKET, recursive=True)}
+    except Exception as exc:
+        logger.warning("No se pudo listar MinIO; no se filtran capturas: %s", exc)
+        return None
+
+
 # ─── Retención de datos ───────────────────────────────────────────────────────
 
 def _configure_minio_lifecycle():
@@ -226,7 +239,11 @@ async def latest_inference():
 
 @app.get("/api/today-captures")
 async def today_captures():
-    """Capturas del día actual — límite configurable por MAX_CAPTURES_TODAY."""
+    """
+    Capturas del día actual (límite MAX_CAPTURES_TODAY). Se descartan las capturas
+    cuya imagen ya no existe en MinIO, para que el carrusel no muestre huecos ni
+    un contador desfasado cuando se borra el bucket.
+    """
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("""
             SELECT capture_id, device_id, received_at, processed_at,
@@ -237,12 +254,18 @@ async def today_captures():
             ORDER BY received_at DESC
             LIMIT $1
         """, MAX_CAPTURES_TODAY)
+
+    existing = _existing_paths()   # None si MinIO no responde → no se filtra
     captures = []
     for row in rows:
         d = _to_dict(row)
         d["capture_id"] = str(d["capture_id"])
-        if d.get("minio_path"):
-            d["image_url"] = f"/api/image/{d['minio_path']}"
+        path = d.get("minio_path")
+        if not path:
+            continue
+        if existing is not None and path not in existing:
+            continue   # imagen borrada del bucket → se excluye
+        d["image_url"] = f"/api/image/{path}"
         captures.append(d)
     return {"data": captures, "count": len(captures)}
 
@@ -268,33 +291,36 @@ async def sensors_all_latest():
 @app.get("/api/sensors/averages")
 async def sensors_averages():
     """
-    Promedio general de cada tipo de sensor entre TODAS las zonas de TODOS
-    los ESP32 registrados (última hora). No se distingue por zona: con N
-    zonas por dispositivo y N variable entre dispositivos, el promedio
-    relevante es el global por tipo de sensor.
+    Promedio general de cada tipo de sensor calculado a partir de la ÚLTIMA
+    lectura de cada zona (una por device_id+zona), NO sobre todas las lecturas
+    históricas de la base de datos.
     """
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("""
+            WITH latest AS (
+                SELECT DISTINCT ON (device_id, zona) *
+                FROM sensor_readings
+                ORDER BY device_id, zona, recorded_at DESC
+            )
             SELECT
-                COUNT(DISTINCT device_id)             AS device_count,
-                COUNT(DISTINCT (device_id, zona))      AS zone_count,
-                COUNT(*)                               AS reading_count,
-                ROUND(AVG(temperatura)::numeric,  2)   AS avg_temperatura,
-                ROUND(AVG(hum_ambiente)::numeric, 2)   AS avg_hum_ambiente,
-                ROUND(AVG(hum_suelo)::numeric,    1)   AS avg_hum_suelo,
-                ROUND(AVG(co2_ppm)::numeric,      1)   AS avg_co2_ppm,
-                ROUND(AVG(co_ppm)::numeric,       4)   AS avg_co_ppm,
-                ROUND(AVG(nh3_ppm)::numeric,      4)   AS avg_nh3_ppm,
-                ROUND(AVG(alcohol_ppm)::numeric,  4)   AS avg_alcohol_ppm,
-                ROUND(AVG(humo_ppm)::numeric,     4)   AS avg_humo_ppm,
-                ROUND(AVG(tolueno_ppm)::numeric,  4)   AS avg_tolueno_ppm,
-                ROUND(AVG(acetona_ppm)::numeric,  4)   AS avg_acetona_ppm,
-                MAX(recorded_at)                       AS newest_reading
-            FROM sensor_readings
-            WHERE recorded_at > NOW() - INTERVAL '1 hour'
+                COUNT(DISTINCT device_id)            AS device_count,
+                COUNT(*)                             AS zone_count,
+                COUNT(*)                             AS reading_count,
+                ROUND(AVG(temperatura)::numeric,  2) AS avg_temperatura,
+                ROUND(AVG(hum_ambiente)::numeric, 2) AS avg_hum_ambiente,
+                ROUND(AVG(hum_suelo)::numeric,    1) AS avg_hum_suelo,
+                ROUND(AVG(co2_ppm)::numeric,      1) AS avg_co2_ppm,
+                ROUND(AVG(co_ppm)::numeric,       4) AS avg_co_ppm,
+                ROUND(AVG(nh3_ppm)::numeric,      4) AS avg_nh3_ppm,
+                ROUND(AVG(alcohol_ppm)::numeric,  4) AS avg_alcohol_ppm,
+                ROUND(AVG(humo_ppm)::numeric,     4) AS avg_humo_ppm,
+                ROUND(AVG(tolueno_ppm)::numeric,  4) AS avg_tolueno_ppm,
+                ROUND(AVG(acetona_ppm)::numeric,  4) AS avg_acetona_ppm,
+                MAX(recorded_at)                     AS newest_reading
+            FROM latest
         """)
     if not row or row["device_count"] == 0:
-        return {"data": None, "message": "Sin lecturas en la última hora"}
+        return {"data": None, "message": "Sin lecturas registradas"}
     return {"data": _to_dict(row)}
 
 
