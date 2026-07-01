@@ -36,6 +36,7 @@ from typing import Dict, Optional, Set
 
 import asyncpg
 import paho.mqtt.client as mqtt
+from minio import Minio
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -52,6 +53,15 @@ MQTT_PORT         = int(os.getenv("MQTT_PORT",     "1883"))
 DATABASE_URL      = os.getenv("DATABASE_URL",      "postgresql://srai:srai_pass@postgres:5432/srai_db")
 MINIO_IMAGE_PROXY = os.getenv("MINIO_IMAGE_PROXY", "http://srai_dashboard:8080/api/image")
 CLASES_ENFERMEDAD = set(os.getenv("CLASES_ENFERMEDAD", "tizon_temprano,moho_foliar,TYLCV").split(","))
+
+# Acceso a MinIO para verificar la existencia de las imágenes del historial
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT",   "minio:9000")
+MINIO_ACCESS   = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
+MINIO_SECRET   = os.getenv("MINIO_SECRET_KEY", "minioadmin123")
+MINIO_BUCKET   = os.getenv("MINIO_BUCKET",     "srai-images")
+
+# Zona horaria de CDMX: UTC-6 todo el año (sin horario de verano desde 2022)
+CDMX_TZ = timezone(timedelta(hours=-6))
 
 # ─── Estado global ────────────────────────────────────────────────────────────
 db_pool: asyncpg.Pool = None
@@ -81,6 +91,36 @@ ENFERMEDAD_INFO = {
         "tratamiento": None,
     },
 }
+
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+def _to_cdmx(dt: Optional[datetime]) -> Optional[datetime]:
+    """Convierte un datetime (UTC o naive-asumido-UTC) a hora de CDMX."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(CDMX_TZ)
+
+
+async def _existing_minio_paths() -> Optional[Set[str]]:
+    """
+    Devuelve el conjunto de object_names presentes actualmente en MinIO.
+    Devuelve None si MinIO no está disponible; en ese caso el historial NO se
+    filtra (para no ocultar todo ante una caída temporal del almacenamiento).
+    """
+    def _list() -> Set[str]:
+        client = Minio(
+            MINIO_ENDPOINT, access_key=MINIO_ACCESS,
+            secret_key=MINIO_SECRET, secure=False,
+        )
+        return {obj.object_name for obj in client.list_objects(MINIO_BUCKET, recursive=True)}
+
+    try:
+        return await asyncio.to_thread(_list)
+    except Exception as exc:
+        logger.warning("No se pudo listar MinIO; se omite el filtrado del historial: %s", exc)
+        return None
 
 
 # ─── WebSocket Connection Manager ─────────────────────────────────────────────
@@ -329,6 +369,12 @@ async def receive_disease_event(event: DiseaseEvent):
 
     info = ENFERMEDAD_INFO.get(clase, {"nombre": clase, "descripcion": None, "tratamiento": None})
 
+    # Hora de detección en zona horaria de CDMX
+    try:
+        detected_at = _to_cdmx(datetime.fromisoformat(event.processed_at)).isoformat()
+    except Exception:
+        detected_at = event.processed_at
+
     msg = {
         "type":          "disease_alert",
         "capture_id":    event.capture_id,
@@ -339,7 +385,7 @@ async def receive_disease_event(event: DiseaseEvent):
         "confianza":     confianza,
         "probabilidades": event.inference.get("probabilidades", {}),
         "image_url":     image_url,
-        "detected_at":   event.processed_at,
+        "detected_at":   detected_at,
         "es_enfermedad": clase in CLASES_ENFERMEDAD,
     }
 
@@ -359,8 +405,9 @@ async def get_disease_history(
     Historial de capturas del día indicado ordenadas por hora.
     Incluye: hora, zona, clase de enfermedad, confianza, URL de imagen.
     """
-    target = date.fromisoformat(date_str) if date_str else date.today()
-    start  = datetime.combine(target, datetime.min.time())
+    target = date.fromisoformat(date_str) if date_str else datetime.now(CDMX_TZ).date()
+    # Ventana del día alineada a la zona horaria de CDMX
+    start  = datetime.combine(target, datetime.min.time(), tzinfo=CDMX_TZ)
     end    = start + timedelta(days=1)
 
     async with db_pool.acquire() as conn:
@@ -377,6 +424,14 @@ async def get_disease_history(
             start, end, limit,
         )
 
+    # Descarta capturas cuya imagen ya no existe en MinIO (p. ej. si se borró
+    # el bucket). Si MinIO no responde, existing es None y no se filtra.
+    existing = await _existing_minio_paths()
+    rows = [
+        r for r in rows
+        if existing is None or (r["minio_path"] and r["minio_path"] in existing)
+    ]
+
     return {
         "date":    target.isoformat(),
         "total":   len(rows),
@@ -385,7 +440,7 @@ async def get_disease_history(
                 "capture_id":    str(r["capture_id"]),
                 "device_id":     r["device_id"],
                 "zona":          r["zona"] or r["device_id"],
-                "hora":          r["processed_at"].strftime("%H:%M:%S") if r["processed_at"] else None,
+                "hora":          _to_cdmx(r["processed_at"]).strftime("%H:%M:%S") if r["processed_at"] else None,
                 "clase":         r["clase"],
                 "nombre":        ENFERMEDAD_INFO.get(r["clase"] or "", {}).get("nombre", r["clase"]),
                 "confianza":     r["confianza"],
@@ -428,8 +483,8 @@ async def get_disease_detail(capture_id: str):
         "capture_id":    str(row["capture_id"]),
         "device_id":     row["device_id"],
         "zona":          row["zona"] or row["device_id"],
-        "hora":          row["processed_at"].strftime("%H:%M:%S") if row["processed_at"] else None,
-        "fecha":         row["processed_at"].date().isoformat() if row["processed_at"] else None,
+        "hora":          _to_cdmx(row["processed_at"]).strftime("%H:%M:%S") if row["processed_at"] else None,
+        "fecha":         _to_cdmx(row["processed_at"]).date().isoformat() if row["processed_at"] else None,
         "clase":         clase,
         "es_enfermedad": clase in CLASES_ENFERMEDAD,
         "confianza":     row["confianza"],
@@ -629,6 +684,107 @@ async def get_zone_history(
     }
 
 
+# ─── REST: Serie histórica por zona + sensor ──────────────────────────────────
+
+# Whitelist de columnas: se interpolan en el SQL, nunca vienen del usuario libre
+_SERIE_FIELDS = {"temperatura", "hum_ambiente", "hum_suelo", "co2_ppm", "co_ppm", "nh3_ppm"}
+
+
+@app.get("/api/sensors/zone/{zona}/series")
+async def get_zone_series(
+    zona: str,
+    field: str = Query("temperatura"),
+    period: str = Query("day", pattern="^(day|week|month)$"),
+    fecha: Optional[str] = None,
+):
+    """
+    Serie histórica de UN sensor de UNA zona, con promedio, mínimo y máximo por
+    bucket, más un resumen del período completo. Alineado a zona horaria CDMX.
+    Buckets:
+      day   → por hora (día en curso)
+      week  → por día  (semana calendario lun-dom)
+      month → por día  (mes calendario)
+    """
+    if field not in _SERIE_FIELDS:
+        raise HTTPException(400, f"Campo inválido: {field}")
+
+    target = date.fromisoformat(fecha) if fecha else datetime.now(CDMX_TZ).date()
+
+    if period == "day":
+        start = datetime.combine(target, datetime.min.time(), tzinfo=CDMX_TZ)
+        end   = start + timedelta(days=1)
+        trunc = "hour"
+    elif period == "week":
+        monday = target - timedelta(days=target.weekday())
+        start  = datetime.combine(monday, datetime.min.time(), tzinfo=CDMX_TZ)
+        end    = start + timedelta(weeks=1)
+        trunc  = "day"
+    else:  # month
+        first = target.replace(day=1)
+        nxt   = (first + timedelta(days=32)).replace(day=1)
+        start = datetime.combine(first, datetime.min.time(), tzinfo=CDMX_TZ)
+        end   = datetime.combine(nxt,   datetime.min.time(), tzinfo=CDMX_TZ)
+        trunc = "day"
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            f"""
+            SELECT
+                date_trunc('{trunc}', recorded_at AT TIME ZONE 'America/Mexico_City') AS bucket,
+                ROUND(AVG({field})::numeric, 2) AS prom,
+                ROUND(MIN({field})::numeric, 2) AS minimo,
+                ROUND(MAX({field})::numeric, 2) AS maximo,
+                COUNT(*)                        AS lecturas
+            FROM sensor_readings
+            WHERE zona = $1 AND recorded_at >= $2 AND recorded_at < $3
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            zona, start, end,
+        )
+
+    def label_of(bucket) -> str:
+        if bucket is None:
+            return ""
+        return bucket.strftime("%H:%M") if period == "day" else bucket.strftime("%d/%m")
+
+    def f(v):
+        return float(v) if v is not None else None
+
+    data = [
+        {
+            "label":    label_of(r["bucket"]),
+            "prom":     f(r["prom"]),
+            "min":      f(r["minimo"]),
+            "max":      f(r["maximo"]),
+            "lecturas": r["lecturas"],
+        }
+        for r in rows
+    ]
+
+    # Resumen del período completo, calculado a partir de los buckets
+    proms = [(d["prom"], d["lecturas"]) for d in data if d["prom"] is not None]
+    mins  = [d["min"] for d in data if d["min"] is not None]
+    maxs  = [d["max"] for d in data if d["max"] is not None]
+    total = sum(n for _, n in proms)
+    resumen = {
+        "min":      round(min(mins), 2) if mins else None,
+        "prom":     round(sum(p * n for p, n in proms) / total, 2) if total else None,
+        "max":      round(max(maxs), 2) if maxs else None,
+        "lecturas": sum(d["lecturas"] for d in data),
+    }
+
+    return {
+        "zona":    zona,
+        "field":   field,
+        "period":  period,
+        "start":   start.isoformat(),
+        "end":     end.isoformat(),
+        "resumen": resumen,
+        "data":    data,
+    }
+
+
 # ─── REST: Actuadores ─────────────────────────────────────────────────────────
 
 class ValvulaCmd(BaseModel):
@@ -648,13 +804,42 @@ async def set_valvula(cmd: ValvulaCmd):
         raise HTTPException(status_code=503, detail="MQTT no disponible")
 
     topic   = f"invernadero/jitomate/{cmd.device_id}/cmd"
-    payload = json.dumps({"zona": cmd.zona, "valvula": cmd.valvula})
+    # separators sin espacios: el ESP32 parsea por subcadena exacta ("zona":1),
+    # así que el JSON debe quedar compacto {"zona":1,"valvula":true}
+    payload = json.dumps({"zona": cmd.zona, "valvula": cmd.valvula}, separators=(",", ":"))
 
     result = _mqtt_client.publish(topic, payload, qos=0)
     if result.rc != mqtt.MQTT_ERR_SUCCESS:
         raise HTTPException(status_code=500, detail="Error publicando comando MQTT")
 
     logger.info("Comando válvula publicado: %s → %s", topic, payload)
+    return {"ok": True, "topic": topic, "payload": payload}
+
+
+class ModoAutoCmd(BaseModel):
+    device_id: str          # ej. "ESP32_1"
+    zona:      int          # 1, 2, 3 ...
+
+
+@app.post("/api/actuators/modo/auto")
+async def set_modo_auto(cmd: ModoAutoCmd):
+    """
+    Publica un comando MQTT al ESP32 para devolver una zona a control automático.
+    El ESP32 sale del modo manual y la válvula vuelve a regirse por la humedad
+    de suelo. Comando: {"zona": N, "modo": "auto"}.
+    """
+    if _mqtt_client is None or not _mqtt_client.is_connected():
+        raise HTTPException(status_code=503, detail="MQTT no disponible")
+
+    topic   = f"invernadero/jitomate/{cmd.device_id}/cmd"
+    # separators sin espacios para compatibilidad con el firmware
+    payload = json.dumps({"zona": cmd.zona, "modo": "auto"}, separators=(",", ":"))
+
+    result = _mqtt_client.publish(topic, payload, qos=0)
+    if result.rc != mqtt.MQTT_ERR_SUCCESS:
+        raise HTTPException(status_code=500, detail="Error publicando comando MQTT")
+
+    logger.info("Comando modo auto publicado: %s → %s", topic, payload)
     return {"ok": True, "topic": topic, "payload": payload}
 
 

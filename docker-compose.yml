@@ -144,6 +144,8 @@ services:
         condition: service_healthy
       mosquitto:
         condition: service_started
+      minio:
+        condition: service_healthy
       srai_dashboard:
         condition: service_started
     restart: unless-stopped
