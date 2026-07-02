@@ -8,7 +8,9 @@ del tópico MQTT: invernadero/jitomate/{MQTT_CLIENT_ID}/estado
 import asyncio
 import json
 import logging
+import math
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from decimal import Decimal
@@ -87,6 +89,34 @@ def _device_id_from_topic(topic: str) -> str:
     return parts[2] if len(parts) >= 4 else "desconocido"
 
 
+# Tokens de float inválidos que el ESP32 podría enviar (nan, inf, -inf, etc.)
+_BAD_FLOAT_RE = re.compile(r'-?\b(?:nan|infinity|inf)\b', re.IGNORECASE)
+
+
+def _sanitize(obj):
+    """Convierte cualquier float no finito (NaN/Inf) en None, recursivamente."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
+def _lenient_json(payload: str):
+    """
+    Parsea el JSON aunque venga con nan/inf en minúscula (JSON inválido para
+    Python). Reemplaza esos tokens por null y neutraliza NaN/Inf ya parseados,
+    para que NINGÚN dato del ESP32 se pierda por un valor inválido.
+    """
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        data = json.loads(_BAD_FLOAT_RE.sub('null', payload))
+    return _sanitize(data)
+
+
 def _periodo_where(period: str, col: str) -> str:
     if period == "day":
         return f"date_trunc('day', {col}) = date_trunc('day', $2)"
@@ -147,9 +177,9 @@ def _handle_estado(msg, device_id: str):
         return
 
     try:
-        data = json.loads(payload)
-    except json.JSONDecodeError:
-        logger.warning("JSON invalido de %s: %s", device_id, payload[:120])
+        data = _lenient_json(payload)
+    except Exception:
+        logger.warning("JSON irrecuperable de %s: %s", device_id, payload[:120])
         return
 
     if _event_loop:

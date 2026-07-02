@@ -78,7 +78,10 @@ def _to_dict(record) -> dict:
         if isinstance(v, datetime):
             d[k] = v.isoformat()
         elif isinstance(v, Decimal):
-            d[k] = float(v)
+            f = float(v)
+            d[k] = f if math.isfinite(f) else None      # NaN/Inf → null (JSON válido)
+        elif isinstance(v, float):
+            d[k] = v if math.isfinite(v) else None
         elif k == 'probabilidades':
             d[k] = _clean_probs(v)
     return d

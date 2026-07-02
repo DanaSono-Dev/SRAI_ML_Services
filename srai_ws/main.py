@@ -27,7 +27,9 @@ Notificaciones push:
 import asyncio
 import json
 import logging
+import math
 import os
+import re
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -94,6 +96,35 @@ ENFERMEDAD_INFO = {
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
+
+# Tokens de float inválidos que el ESP32 podría enviar (nan, inf, -inf, etc.)
+_BAD_FLOAT_RE = re.compile(r'-?\b(?:nan|infinity|inf)\b', re.IGNORECASE)
+
+
+def _sanitize(obj):
+    """Convierte cualquier float no finito (NaN/Inf) en None, recursivamente."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
+def _lenient_json(payload: str):
+    """
+    Parsea el JSON aunque venga con nan/inf en minúscula (JSON inválido) y
+    neutraliza NaN/Inf ya parseados, para no descartar el mensaje del ESP32 ni
+    reenviar valores inválidos por WebSocket.
+    """
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        data = json.loads(_BAD_FLOAT_RE.sub('null', payload))
+    return _sanitize(data)
+
+
 def _to_cdmx(dt: Optional[datetime]) -> Optional[datetime]:
     """Convierte un datetime (UTC o naive-asumido-UTC) a hora de CDMX."""
     if dt is None:
@@ -204,7 +235,7 @@ async def _process_mqtt_queue():
                 continue
             parts = topic.split("/")
             device_id = parts[2] if len(parts) > 2 else "unknown"
-            zones_data: dict = json.loads(payload)
+            zones_data: dict = _lenient_json(payload)
             ts = datetime.now(timezone.utc).isoformat()
 
             # Canal por zona individual
