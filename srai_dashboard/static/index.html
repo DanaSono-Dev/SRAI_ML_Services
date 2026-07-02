@@ -1066,8 +1066,19 @@ function s3ShowDevice() {
     .sort()
     .pop();
 
+  // ESP32 sin reportar por más de DISCONNECT_MS → datos de zona reseteados a "—"
+  const DISCONNECT_MS = 150000;
+  const stale = !latestUpdate || (Date.now() - new Date(latestUpdate).getTime() > DISCONNECT_MS);
+  const NULL_FIELDS = {
+    temperatura: null, hum_ambiente: null, hum_suelo: null, co2_ppm: null,
+    co_ppm: null, nh3_ppm: null, alcohol_ppm: null, humo_ppm: null,
+    tolueno_ppm: null, acetona_ppm: null,
+    temp_estado: 'sin_dato', hum_amb_estado: 'sin_dato',
+    suelo_estado: 'sin_dato', co2_estado: 'sin_dato',
+  };
+
   const zonasHtml = zonaKeys.map(zonaKey => {
-    const d = zonas[zonaKey];
+    const d = stale ? { ...zonas[zonaKey], ...NULL_FIELDS } : zonas[zonaKey];
     const valv = d.valvula
       ? '<span class="valve-open">■ ABIERTA</span>'
       : '<span class="valve-closed">□ CERRADA</span>';
@@ -1120,7 +1131,7 @@ function s3ShowDevice() {
     <div class="dev-slide">
       <div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:2px">
         <span style="font-size:13px;font-weight:700;color:var(--blue)">${deviceId}</span>
-        <span style="font-size:10px;color:var(--muted)">${zonaKeys.length} zona${zonaKeys.length !== 1 ? 's' : ''} · ${fmtDatetime(latestUpdate)}</span>
+        <span style="font-size:10px;color:var(--muted)">${zonaKeys.length} zona${zonaKeys.length !== 1 ? 's' : ''} · ${fmtDatetime(latestUpdate)}${stale ? ' <span class="status s-crit" style="margin-left:6px">SIN CONEXIÓN</span>' : ''}</span>
       </div>
       ${zonasHtml}
     </div>
